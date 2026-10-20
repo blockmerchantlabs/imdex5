@@ -125,29 +125,51 @@ contract Imdex5Handler is CommonBase, StdUtils {
             balancesBefore[i] = MockERC20(tokens[i]).balanceOf(address(index));
             holdsValue = holdsValue || heldBefore[i] > 0;
         }
+        bool[] memory residual = _residualFlags();
         vm.prank(who);
         try index.mint(shares, maxIn, 0) {
             uint256 paid = imdBefore - imd.balanceOf(who);
             uint256 minted = index.balanceOf(who) - sharesBefore;
             require(minted > 0 && minted <= shares, "invalid shares minted");
             uint256 expected = shares;
+            bool residualShort = false;
             for (uint256 i; i < tokens.length; ++i) {
                 uint256 need = Math.mulDiv(heldBefore[i], shares, supply, Math.Rounding.Ceil);
                 if (need == 0) continue;
                 uint256 received = MockERC20(tokens[i]).balanceOf(address(index)) - balancesBefore[i];
+                if (residual[i]) {
+                    // audit finding 1: a residual never cuts the mint; what its pool could not
+                    // give is paid into idle IMD at its price (checked below)
+                    if (received < need) residualShort = true;
+                    continue;
+                }
                 expected = Math.min(expected, Math.mulDiv(shares, received, need));
                 require(heldBefore[i] * minted <= received * supply, "mint diluted an existing holding");
             }
             require(minted == expected, "wrong delivered fraction minted");
-            require(
-                index.idleImd() - idleBefore == Math.mulDiv(idleBefore, minted, supply, Math.Rounding.Ceil),
-                "idle charged other than the issued shares' fraction"
-            );
+            uint256 idleFraction = Math.mulDiv(idleBefore, minted, supply, Math.Rounding.Ceil);
+            if (residualShort) {
+                require(index.idleImd() - idleBefore >= idleFraction, "a residual's shortfall was not paid into idle");
+            } else {
+                require(index.idleImd() - idleBefore == idleFraction, "idle charged other than the issued shares' fraction");
+            }
             require(paid <= maxIn, "mint pulled more than maxImdIn");
             require(index.feeImd() >= feeBefore, "mint reduced feeImd");
             if (paid == 0) ghostFreeMints += 1;
             require(holdsValue, "a mint succeeded while the index held nothing");
         } catch {}
+    }
+
+    /// @dev true for each tracked token that is held as a residual (left the list, not yet sold)
+    function _residualFlags() internal view returns (bool[] memory flags) {
+        flags = new bool[](tokens.length);
+        Imdex5.Coin[] memory cs = index.coins();
+        uint256 lc = index.listCount();
+        for (uint256 j = lc; j < cs.length; ++j) {
+            for (uint256 i; i < tokens.length; ++i) {
+                if (tokens[i] == cs[j].token) flags[i] = true;
+            }
+        }
     }
 
     function redeem(uint256 seed, uint256 shares) external {
@@ -284,8 +306,8 @@ contract Imdex5Handler is CommonBase, StdUtils {
             panelSize: 5,
             quorum: 4,
             agreed: agreed,
-            issuedAt: uint64(block.timestamp),
-            expiresAt: uint64(block.timestamp + 86_400)
+            issuedAt: uint64(vm.getBlockTimestamp()),
+            expiresAt: uint64(vm.getBlockTimestamp() + 86_400)
         });
         bytes32 id = intake.lastRequestId();
         uint256 imdBefore = imd.balanceOf(address(index));
@@ -323,6 +345,11 @@ contract Imdex5Handler is CommonBase, StdUtils {
         calls["submit"]++;
         if (!hasPending) return;
         if (index.answerHash() != keccak256(pending.answer)) {
+            hasPending = false;
+            return;
+        }
+        // an answer past its window cannot be adopted (audit finding 2); the next ask clears it
+        if (vm.getBlockTimestamp() > pending.expiresAt) {
             hasPending = false;
             return;
         }

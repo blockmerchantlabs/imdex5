@@ -309,9 +309,9 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
     /// and stores them as the next list.
     function submit(OracleAttestation.Attestation calldata a, bytes calldata signature) external nonReentrant {
         if (answerHash == 0 || keccak256(a.answer) != answerHash) revert WrongAnswer();
-        if (!SignatureChecker.isValidSignatureNowCalldata(oracleSigner, attestationDigest(a), signature)) {
-            revert BadSignature();
-        }
+        // the signed struct itself must show the quorum, and be inside its validity window
+        if (a.agreed < MIN_AGREED) revert BadList();
+        _verifyAttestation(a, signature);
         bytes32[] memory ids = decodeBytes32List(a);
         uint256 n = ids.length;
         if (n == 0 || n > MAX_LIST) revert BadList();
@@ -391,11 +391,33 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
         uint256 supply = totalSupply();
         uint256 minted = shares;
         uint256 cost = 0;
+        uint256 charged = 0;
         uint256 n = _coins.length;
         for (uint256 i = 0; i < n; ++i) {
             Coin memory coin = _coins[i];
             uint256 need = Math.mulDiv(held[coin.token], shares, supply, Math.Rounding.Ceil);
             if (need == 0) continue;
+            if (i >= listCount) {
+                // a residual (left the list, not yet sold) never blocks mint: buy what its pool
+                // gives; whatever it cannot give is paid at its pool's current price into the
+                // holders' idle IMD, so holders are not diluted
+                uint256 got = 0;
+                try this.swapSelf{gas: SWAP_GAS}(coin.token, coin.hook, true, need, true, false) returns (
+                    uint256 rIn, uint256 rOut
+                ) {
+                    cost += rIn;
+                    held[coin.token] += rOut;
+                    got = rOut;
+                } catch {
+                    emit SwapSkipped(coin.token, true, need);
+                }
+                if (got < need) {
+                    charged += _amountValue(
+                        coin.token, need - got, _sqrtPrice(_key(coin.token, coin.hook)), Math.Rounding.Ceil
+                    );
+                }
+                continue;
+            }
             (uint256 amountIn, uint256 out) = _swap(coin.token, coin.hook, true, need, true, false);
             if (out < need) {
                 minted = Math.min(minted, Math.mulDiv(shares, out, need));
@@ -406,10 +428,10 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
         }
         if (minted < minShares) revert TooFewShares(minted);
         uint256 idlePart = Math.mulDiv(idleImd, minted, supply, Math.Rounding.Ceil);
-        idleImd += idlePart;
+        idleImd += idlePart + charged;
         uint256 fee = Math.mulDiv(cost, FEE_BPS, BPS, Math.Rounding.Ceil);
         feeImd += fee;
-        uint256 total = cost + idlePart + fee;
+        uint256 total = cost + idlePart + charged + fee;
         if (total == 0) revert NothingToPay();
         if (total > maxImdIn) revert TooExpensive(total);
         _mint(caller, minted);
@@ -439,7 +461,8 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
         uint256 idlePart = Math.mulDiv(idleImd, shares, supply);
         idleImd -= idlePart;
         proceeds += idlePart;
-        uint256 fee = Math.mulDiv(proceeds, FEE_BPS, BPS, Math.Rounding.Ceil);
+        // the last holder is paid in full on this path too (invariant 4)
+        uint256 fee = supply == shares ? 0 : Math.mulDiv(proceeds, FEE_BPS, BPS, Math.Rounding.Ceil);
         feeImd += fee;
         uint256 out = proceeds - fee;
         if (out < minImdOut) revert TooLittleOut(out);
@@ -567,10 +590,19 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
 
     /// @dev The IMD value of the holding of `token` at the pool's spot price; zero without a price.
     function _value(address token, uint256 sqrtP) private view returns (uint256) {
-        uint256 h = held[token];
-        if (sqrtP == 0 || h == 0) return 0;
-        if (IMD < token) return Math.mulDiv(Math.mulDiv(h, Q96, sqrtP), Q96, sqrtP);
-        return Math.mulDiv(Math.mulDiv(h, sqrtP, Q96), sqrtP, Q96);
+        return _amountValue(token, held[token], sqrtP, Math.Rounding.Floor);
+    }
+
+    /// @dev IMD value of `amount` of `token` at the pool's square-root price, rounded up when
+    /// charging a minter for a residual it could not buy.
+    function _amountValue(address token, uint256 amount, uint256 sqrtP, Math.Rounding r)
+        private
+        view
+        returns (uint256)
+    {
+        if (sqrtP == 0 || amount == 0) return 0;
+        if (IMD < token) return Math.mulDiv(Math.mulDiv(amount, Q96, sqrtP, r), Q96, sqrtP, r);
+        return Math.mulDiv(Math.mulDiv(amount, sqrtP, Q96, r), sqrtP, Q96, r);
     }
 
     function _inList(Coin[] memory list, address token) private pure returns (bool) {

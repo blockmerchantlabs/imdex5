@@ -358,12 +358,16 @@ contract Imdex5TaxEverywhereTest is Imdex5Base {
         assertEq(index.coins()[4].token, tokens[4]);
         assertEq(index.held(tokens[4]), heldBefore, "held moved without a sale");
         _assertAccounting();
-        // later mints skip nothing: the residual is still bought pro rata and credited net
-        uint256 need = Math.mulDiv(heldBefore, 100e18, index.totalSupply(), Math.Rounding.Ceil);
-        uint256 minted = _mintAndCheck(bob, 100e18);
-        assertEq(
-            minted, Math.mulDiv(100e18, need - need * 300 / 10_000, need), "the residual's tax did not reduce the mint"
-        );
+        // audit finding 1: a residual's short fill (here its 3% tax) no longer cuts the mint; it is
+        // bought and credited net, and the shortfall is paid at its pool's price into idle IMD
+        uint256 idleBefore = index.idleImd();
+        uint256 heldResidual = index.held(tokens[4]);
+        vm.prank(bob);
+        index.mint(100e18, 5000e18, 100e18);
+        assertEq(index.balanceOf(bob), 100e18, "a residual's tax cut the mint");
+        assertGt(index.held(tokens[4]), heldResidual, "the residual was not bought");
+        assertGt(index.idleImd(), idleBefore, "the shortfall was not paid into idle IMD");
+        _assertAccounting();
         _redeemAllAndCheck(alice);
         _redeemAllAndCheck(bob);
         _assertCleared();

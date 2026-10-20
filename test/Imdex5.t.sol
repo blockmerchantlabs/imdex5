@@ -96,7 +96,7 @@ contract Imdex5Test is Test {
         index.mintFirst(amount, _zeros());
     }
 
-    function _attestation(uint64[] memory launches) internal pure returns (OracleAttestation.Attestation memory a) {
+    function _attestation(uint64[] memory launches) internal view returns (OracleAttestation.Attestation memory a) {
         bytes32[] memory ids = new bytes32[](launches.length);
         for (uint256 i = 0; i < launches.length; ++i) {
             ids[i] = bytes32(uint256(launches[i]));
@@ -115,8 +115,8 @@ contract Imdex5Test is Test {
             panelSize: 5,
             quorum: 4,
             agreed: 5,
-            issuedAt: 1_800_000_000,
-            expiresAt: 1_800_086_400
+            issuedAt: uint64(vm.getBlockTimestamp()),
+            expiresAt: uint64(vm.getBlockTimestamp() + 86_400)
         });
     }
 
@@ -454,7 +454,8 @@ contract Imdex5Test is Test {
     }
 
     // ---- redeemToImd ----
-    function test_redeemToImdSellsAndKeepsFee() public {
+    /// Audit finding 4: the last holder is paid in full on the IMD path too (invariant 4).
+    function test_redeemToImdSellsAndTheLastHolderPaysNoFee() public {
         _mintFirst(alice, 1000e18);
         uint256 before = imd.balanceOf(alice);
         vm.prank(alice);
@@ -463,14 +464,27 @@ contract Imdex5Test is Test {
         assertGt(got, 900e18);
         assertLt(got, 995e18);
         uint256 proceeds = 6 * IMD_RESERVE + 5 * 199e18 - imd.balanceOf(address(pm));
-        uint256 fee = (proceeds * 50 + 9999) / 10_000;
-        assertEq(got, proceeds - fee);
-        assertEq(index.feeImd(), 5e18 + fee);
+        assertEq(got, proceeds);
+        assertEq(index.feeImd(), 5e18);
         assertEq(index.totalSupply(), 0);
         for (uint256 i = 0; i < 5; ++i) {
             assertEq(index.held(tokens[i]), 0);
         }
         assertEq(imd.balanceOf(address(index)), index.feeImd());
+    }
+
+    function test_redeemToImdChargesTheFeeWhileOthersHold() public {
+        _mintFirst(alice, 1000e18);
+        uint256 feeBefore = index.feeImd();
+        uint256 before = imd.balanceOf(alice);
+        vm.prank(alice);
+        index.redeemToImd(500e18, 0);
+        uint256 got = imd.balanceOf(alice) - before;
+        uint256 fee = index.feeImd() - feeBefore;
+        assertGt(fee, 0);
+        // 0.50% of the proceeds, rounded up
+        assertEq(fee, ((got + fee) * 50 + 9999) / 10_000);
+        assertEq(index.totalSupply(), 495e18);
     }
 
     function test_redeemToImdRevertsBelowMinOut() public {
@@ -779,6 +793,9 @@ contract Imdex5Test is Test {
         vm.prank(bob);
         index.ask();
         bytes32 id = intake.lastRequestId();
+        // the panel signs when it delivers
+        a.issuedAt = uint64(vm.getBlockTimestamp());
+        a.expiresAt = uint64(vm.getBlockTimestamp() + 86_400);
         vm.prank(address(intake));
         index.onOracleResult(id, a, "");
         assertEq(index.answerHash(), keccak256(a.answer));
@@ -786,6 +803,42 @@ contract Imdex5Test is Test {
         vm.prank(bob);
         vm.expectRevert(err);
         index.submit(a, sig);
+    }
+
+    /// Audit finding 2: an answer past its signed window cannot be adopted.
+    function test_submitRejectsAnExpiredAttestation() public {
+        vm.prank(alice);
+        index.fund(100e18);
+        vm.prank(bob);
+        index.ask();
+        OracleAttestation.Attestation memory a = _attestation(_launches(3));
+        bytes32 id = intake.lastRequestId();
+        vm.prank(address(intake));
+        index.onOracleResult(id, a, "");
+        bytes memory sig = _sign(a);
+        vm.warp(uint256(a.expiresAt) + 1);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(OracleAttestationConsumer.AttestationExpired.selector, a.expiresAt));
+        index.submit(a, sig);
+    }
+
+    /// Audit finding 3: the quorum is read from the signed struct, not only from the delivery.
+    function test_submitRejectsASignedAttestationWithoutQuorum() public {
+        vm.prank(alice);
+        index.fund(100e18);
+        vm.prank(bob);
+        index.ask();
+        OracleAttestation.Attestation memory delivered = _attestation(_launches(3));
+        bytes32 id = intake.lastRequestId();
+        vm.prank(address(intake));
+        index.onOracleResult(id, delivered, "");
+        OracleAttestation.Attestation memory signed = _attestation(_launches(3));
+        signed.agreed = 0;
+        signed.panelJobId = keccak256("another panel");
+        bytes memory sig = _sign(signed);
+        vm.prank(bob);
+        vm.expectRevert(Imdex5.BadList.selector);
+        index.submit(signed, sig);
     }
 
     // ---- rebalance ----

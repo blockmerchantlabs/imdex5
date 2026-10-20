@@ -650,7 +650,9 @@ contract Imdex5EdgesTest is Imdex5Base {
         assertGe(v0, total * 24 / 100, "trimmed below a quarter");
     }
 
-    function test_residualsAreRedeemedAndBlockMintWhileTheirPoolIsDead() public {
+    /// Audit finding 1 (medium): a dead residual no longer blocks mint. The minter pays what the
+    /// residual's pool could not give, at its current price, into the holders' idle IMD.
+    function test_residualsAreRedeemedAndADeadOneDoesNotBlockMint() public {
         _mintFirst(alice, 1000e18);
         _deliverList(_launches(4));
         pm.setDead(_key(tokens[4], hooks[4]), true);
@@ -658,27 +660,57 @@ contract Imdex5EdgesTest is Imdex5Base {
         index.rebalance();
         assertEq(index.coins().length, 5);
         assertEq(index.listCount(), 4);
-        // accepted by the brief: a dead pool blocks mint
+        uint256 heldDead = index.held(tokens[4]);
+        uint256 idleBefore = index.idleImd();
         vm.prank(bob);
-        vm.expectRevert();
-        index.mint(1e18, 100e18, 0);
+        index.mint(1e18, 100e18, 1e18);
+        assertEq(index.balanceOf(bob), 1e18, "full shares despite the dead residual");
+        assertEq(index.held(tokens[4]), heldDead, "nothing bought from the dead pool");
+        assertGt(index.idleImd(), idleBefore, "the residual's value was paid into idle IMD");
+        // another cycle: mint keeps working while the pool stays dead
+        vm.warp(vm.getBlockTimestamp() + 7 days);
+        _deliverList(_launches(4));
+        vm.prank(bob);
+        index.rebalance();
+        vm.prank(bob);
+        index.mint(1e18, 100e18, 1e18);
+        assertEq(index.balanceOf(bob), 2e18);
         // never redeem: alice gets her share of the residual in kind
         uint256 heldE = index.held(tokens[4]);
+        uint256 supplyNow = index.totalSupply();
         vm.prank(alice);
         index.redeem(199e18);
-        assertEq(MockERC20(tokens[4]).balanceOf(alice), heldE * 199e18 * 9950 / (995e18 * 10_000));
+        assertEq(MockERC20(tokens[4]).balanceOf(alice), heldE * 199e18 * 9950 / (supplyNow * 10_000));
         // redeemToImd pays the dead residual in kind and the rest in IMD
         uint256 imdBefore = imd.balanceOf(alice);
         vm.prank(alice);
         index.redeemToImd(199e18, 0);
         assertGt(imd.balanceOf(alice), imdBefore);
-        assertGt(MockERC20(tokens[4]).balanceOf(alice), heldE * 199e18 * 9950 / (995e18 * 10_000));
-        // once the pool is back, mint works again and buys the residual proportionally
+        assertGt(MockERC20(tokens[4]).balanceOf(alice), heldE * 199e18 * 9950 / (supplyNow * 10_000));
+        // once the pool is back, mint buys the residual proportionally again
         pm.setDead(_key(tokens[4], hooks[4]), false);
         uint256 heldE2 = index.held(tokens[4]);
         vm.prank(bob);
         index.mint(1e18, 100e18, 0);
         assertGt(index.held(tokens[4]), heldE2);
+        _assertImdAccounting();
+    }
+
+    /// Audit finding 1, thin variant: a residual pool that gives only a sliver no longer starves
+    /// a floored mint; the shortfall is paid at the pool's price into idle IMD.
+    function test_aThinResidualPoolDoesNotStarveAFlooredMint() public {
+        _mintFirst(alice, 1000e18);
+        _deliverList(_launches(4));
+        pm.setDead(_key(tokens[4], hooks[4]), true);
+        vm.prank(bob);
+        index.rebalance();
+        pm.setDead(_key(tokens[4], hooks[4]), false);
+        pm.setMaxIn(_key(tokens[4], hooks[4]), 1e12);
+        uint256 idleBefore = index.idleImd();
+        vm.prank(bob);
+        index.mint(100e18, 2000e18, 97e18);
+        assertEq(index.balanceOf(bob), 100e18, "the floor holds: full shares");
+        assertGt(index.idleImd(), idleBefore);
         _assertImdAccounting();
     }
 

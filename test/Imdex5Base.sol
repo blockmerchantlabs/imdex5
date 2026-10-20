@@ -116,7 +116,7 @@ abstract contract Imdex5Base is Test {
         index.onOracleResult(id, a, "");
     }
 
-    function _attestation(uint64[] memory list) internal pure returns (OracleAttestation.Attestation memory a) {
+    function _attestation(uint64[] memory list) internal view returns (OracleAttestation.Attestation memory a) {
         bytes32[] memory ids = new bytes32[](list.length);
         for (uint256 i = 0; i < list.length; ++i) {
             ids[i] = bytes32(uint256(list[i]));
@@ -135,8 +135,9 @@ abstract contract Imdex5Base is Test {
             panelSize: 5,
             quorum: 4,
             agreed: 5,
-            issuedAt: uint64(START),
-            expiresAt: uint64(START + 86_400)
+            // stamped when delivered, as the oracle does; valid for the body's 86,400 seconds
+            issuedAt: uint64(vm.getBlockTimestamp()),
+            expiresAt: uint64(vm.getBlockTimestamp() + 86_400)
         });
     }
 

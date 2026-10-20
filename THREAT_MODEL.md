@@ -20,13 +20,14 @@ No owner, admin, role, pause or upgrade.
 1. Every IMD the contract holds is in `feeImd`, `idleImd`, or a running call's accounting; nothing is unaccounted.
 2. `held[coin]` equals the coin balance the contract actually holds (what arrived, not what was asked).
 3. A mint never issues more shares than the coins it added back per existing share (no dilution of holders); with `minShares > 0` it never issues fewer than `minShares`.
-4. A redeem pays each holder their pro-rata share minus the 0.50% fee; the last holder is paid in full.
+4. A redeem pays each holder their pro-rata share minus the 0.50% fee; the last holder is paid in full, by `redeem` and by `redeemToImd` alike.
 5. A failed or short swap never leaves value with the caller that belongs to holders.
-6. Only an oracle answer signed by the panel, for this contract, unexpired and not replayed, can change the list.
+6. Only an oracle answer signed by the panel, for this contract, unexpired, with at least four agreeing members in the signed attestation itself, and not replayed, can change the list.
 
 ## Deliberately not findings (accepted, documented)
 
-- A coin whose pool dies blocks `mint` until the next `rebalance`; `redeem` still works.
+- A coin in the list whose pool dies blocks `mint` until a `rebalance` drops it; `redeem` still works.
+- A residual (a coin that left the list and could not yet be sold) never blocks `mint`: the mint buys what its pool gives, and pays whatever the pool cannot give at that pool's current price into the holders' idle IMD. Holders keep their value; they hold a little less of that coin and a little more IMD. The price is the pool's spot price, so a thin residual pool can be moved; the exposure is limited to the residual's share of the index, and moving the price costs the mover.
 - Small leftovers (rounding, coins bought beyond the issued fraction) stay with existing holders.
 - SwarmCity's 2% transfer tax costs a minter about 2% of shares (the floor at 97% passes).
 - A round trip (mint then redeem) costs about 3-5% (two 0.50% fees, pool fees, the tax).
