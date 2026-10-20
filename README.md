@@ -12,10 +12,11 @@ Contracts only: no launch token, pool or website.
 
 | Path | What |
 | --- | --- |
-| `src/Imdex5.sol` | The index. One contract, no constructor arguments, 22,662 bytes of runtime. |
+| `src/Imdex5.sol` | The index. One contract, no constructor arguments, 23,266 bytes of runtime. |
 | `src/OracleAttestation.sol` | The protocol's `OracleAttestation` library and `OracleAttestationConsumer`, copied whole from the oracle-consumer reference. |
 | `src/Interfaces.sol` | The slices of the Uniswap v4 `PoolManager`, the launch registries and the Intake that the index calls. |
 | `test/Imdex5.t.sol` | Behaviour, failure and attack tests against mocks. |
+| `test/Imdex5ResidualSpot.t.sol` | The residual attacks: a dumped residual whose buy reverts cannot be minted at spot; a residual hook that burns gas or leaves a delta fails the mint; a dumped pool that trades is bought in full; a short fill is charged at least its fair value. |
 | `test/OracleConsumerConformance.t.sol` | The protocol's digest and selector vectors. |
 | `test/mocks/Mocks.sol` | Mock ERC-20 (can revert, return false or burn gas), a constant-product stand-in for the PoolManager (price limits, partial fills, short fills, the nonzero-delta count), registries, Intake, an ERC-1271 signer and a hook that re-enters, burns gas or leaves a delta unsettled. |
 | `lib/` | OpenZeppelin Contracts 5.6.1 and forge-std 1.9.6, vendored as ordinary files. |
@@ -30,7 +31,7 @@ forge fmt --check
 
 `foundry.toml` pins solc 0.8.26, optimizer 200 runs, `via_ir`, `cancun`, `bytecode_hash = "none"`.
 Tests mock every outside contract by etching mocks at the mainnet addresses the contract hard-codes;
-`test/Fix3*.fork.t.sol` are mainnet fork tests against the real pools: run them with `forge test --match-path 'test/Fix3*' --fork-url <mainnet rpc>`; the other tests read no environment.
+`test/Fix3*.fork.t.sol` are mainnet fork tests against the real pools: run them with `forge test --match-path 'test/Fix3*' --fork-url <mainnet rpc>`; without a fork they skip, so a plain `forge test` passes with no network. The other tests read no environment.
 
 ## Deployment parameters
 
@@ -113,6 +114,17 @@ The invariant suites check these equalities with both plain coins and a SwarmCit
   A list coin whose holding is zero (its
   buy was skipped at the last rebalance) is not bought by `mint`, exactly as `held * f` says;
   the next `rebalance` buys it from idle IMD.
+- Residuals (coins after `listCount` in `coins()`: they left the list and a rebalance could not
+  fully sell them) are bought by `mint` like any holding, `held * f` of each. One whose pool
+  trades but delivers less than asked (a transfer tax, liquidity that ran out) does not cut the
+  shares: the shortfall is charged at the price the pool just traded at (`slot0` after the buy,
+  rounded up) into the holders' idle IMD, so holders keep their value in a little more IMD. One
+  whose pool rejects the index's buy outright (a dead pool, a hook that reverts, burns gas or
+  leaves a delta unsettled, a swap that needs more than `SWAP_GAS`) is a failed buy: the mint
+  reverts `BuyFailed(coin)` and takes nothing, exactly as a dead list coin does, until the pool
+  works again or a rebalance sells the residual. It is never settled at a spot price nobody paid:
+  that price can be moved by the minter in the same block, which would hand the residual to the
+  new shares for pool fees (audit 3bd5e1aa, fixed in this launch).
 
 While SwarmCity is held, its 2% transfer tax normally means about 98% of the requested later-mint
 shares are issued (subject to integer rounding). The buyer still pays for every buy made, the
@@ -155,8 +167,11 @@ A site should pass about 97% of the requested shares (SwarmCity's 2% tax already
   tokens and runs well under 200,000 gas (tested with a 200,000 gas call).
 - `onOracleFailure`: only from the Intake, for the open request: closes it. `closeRequest()`
   lets anyone close a request open for 2 days.
-- `submit(attestation, signature)`: anyone. `keccak256(answer)` must equal the stored hash and
-  the signature must verify for the signer over this contract's EIP-712 digest (ECDSA, or
+- `submit(attestation, signature)`: anyone. `keccak256(answer)` must equal the stored hash, the
+  signed attestation must show `agreed >= 4`, it must be inside its validity window
+  (`_verifyAttestation`: `AttestationExpired` past `expiresAt`, `AttestationNotYetValid` for an
+  `issuedAt` more than five minutes ahead) and the signature must verify for the signer over
+  this contract's EIP-712 digest (ECDSA, or
   ERC-1271 if the signer has code, through OpenZeppelin's `SignatureChecker`). Decodes 1 to 5
   distinct launch numbers (distinct tokens too), reads each token and hook from the registry that
   records it, reverts if either is missing, stores them as the next list and pays the caller
@@ -213,17 +228,37 @@ Accepted, by the brief: thin-pool price impact, a pool's own hook fee, a dead po
 (never redeem), a short fill that issues fewer shares than asked (above), and an oracle that
 never answers. A hook that burns gas or leaves a delta unsettled for the index's swaps makes that
 swap a skipped one in `rebalance` and an in-kind payment in `redeemToImd`; in `mint` and
-`mintFirst` it is a failed buy, which reverts, as a dead pool does. That includes a leftover: a
+`mintFirst` it is a failed buy, which reverts, as a dead pool does. That includes a residual: a
 coin that left the list but could not be sold stays in the holdings so it is still redeemed, and
-`mint` buys its fraction like any other holding, so while its pool is dead every `mint` reverts
-until the pool works again and a rebalance sells it; `redeem` and `redeemToImd` keep working. Such
-leftovers also stay in the holdings until sold, so each unsellable leaver adds one coin to the
+`mint` buys its fraction like any other holding. While its pool rejects the buy outright every
+`mint` reverts `BuyFailed` until the pool works again or a rebalance sells it; a pool that trades
+but fills short charges the shortfall at the price it traded at and never blocks the mint;
+`redeem` and `redeemToImd` keep working either way (see Mint). Such
+residuals also stay in the holdings until sold, so each unsellable leaver adds one coin to the
 redeem, mint and rebalance loops; at the list's size (five coins, at most five leavers per
 weekly rebalance) the cost grows slowly and `redeem` has `PAY_GAS` per coin, never more.
-`submit` checks only the stored hash and the signature, as the brief asks, not the attestation's
-`expiresAt`: the hash already binds the answer to the index's own request, and the hash is
-cleared once a list is stored or a new request opens, so an attestation is taken once and only
-for the cycle that produced it.
+`submit` checks the stored hash, the signed quorum, the validity window and the signature: the
+hash binds the answer to the index's own request and is cleared once a list is stored or a new
+request opens, so an attestation is taken once and only for the cycle that produced it. It does
+not compare the attestation's `requestId` or `questionHash` with the open request: the hash comes
+only from the Intake's callback for this contract's own request, so a still-valid attestation
+with byte-identical answer adopts the identical list (audit 57e3696c, informational).
+
+Documented limits of the residual rule (audit be08f42a and 4acb1b2e, both low, not redesigned):
+
+- A residual pool with no liquidity left in the buy direction does not revert on Uniswap v4: an
+  exact-output swap fills what it can and leaves `slot0` at the price limit, so the shortfall's
+  charge at that price is astronomical and the mint reverts `TooExpensive`. A mint can therefore
+  request at most what every residual's pool can still deliver; a larger mint waits for the pool
+  to be refilled or a rebalance to sell the residual.
+- The residual's fraction is `held * shares / supply` for the shares asked, as for every coin.
+  When a list coin fills short, the shares issued fall but the residual bought or charged does
+  not, so the minter pays the residual's full requested fraction for fewer shares; the excess
+  coin or IMD stays with the holders, as any coin bought beyond the issued fraction does. A
+  buyer who will not accept a short fill sets `minShares`, which reverts the whole mint.
+- `ask` debits `feeImd` by the oracle price before the Intake pulls it; the accounting
+  invariant assumes the Intake pulls exactly `ORACLE_PRICE` in that call, as the version 2
+  Intake does (audit f094a9a7, informational).
 
 Gas to supply: `rebalance` needs at most `SWAP_GAS` per swap it attempts (up to 5 sales of
 leavers, one trim per holding and one buy per list coin) plus a few hundred thousand; `redeem`
@@ -246,7 +281,22 @@ Nothing is owned. After launch:
 - The launch deploys `Imdex5` from its bytecode as built, with no arguments. No `launch.json` is
   written here; the manifest step writes it.
 
-## Changes for the corrected launch
+## Changes for this launch (from launch 1668's code with the 886e7c22 fixes)
+
+Audit of the code as it arrived: 1 medium, 2 low, 3 informational. The medium is fixed; the
+rest are documented above (Mint, Oracle and Security notes). Reproductions are in
+`ADAPTATION.md`.
+
+| File | Change and reason |
+| --- | --- |
+| `src/Imdex5.sol` | `_mintMore`, residual branch: a residual whose `swapSelf` reverts is a failed buy (`revert BuyFailed(coin)`) instead of being charged at the pool's spot price. The spot price of a pool that just refused to trade is movable by the minter in the same block, so the old settlement handed the residual's value to the new shares for pool fees and gas (audit 3bd5e1aa, medium). The short-fill path (the pool traded, at that price) is unchanged. +36 bytes of runtime. |
+| `test/Imdex5ResidualSpot.t.sol` | New: the audit's reproduction (dump 1,000x, buy reverts, mint the whole supply) now reverts and takes nothing, fuzzed over any dump factor and size; a residual hook that burns gas or leaves a delta fails the mint; a dumped pool that trades is bought in full and dilutes nobody; a short fill is charged at least its fair value. |
+| `test/Imdex5Edges.t.sol` | `test_residualsAreRedeemedAndADeadOneDoesNotBlockMint` became `test_residualsAreRedeemedAndADeadOneBlocksMintWithoutTakingImd`: the dead residual now reverts the mint, redeems keep working, the mint buys it again once the pool is back. |
+| `test/Imdex5.invariant.t.sol` | Comment only: the mint handler's residual note names both audits; a reverting residual is absorbed by its `catch` like any revert. |
+| `test/Fix3*.fork.t.sol` | Skip (`vm.skip`) when the mainnet IMD contract has no code, so `forge test` passes with no network; with `--fork-url` they run as before. |
+| `README.md`, `THREAT_MODEL.md`, `ADAPTATION.md` | Describe the shipped behaviour: `submit` checks the window and quorum; a residual's buy that reverts blocks mint, a short fill does not (audit 357a7068, informational); the two low findings and the two other informational ones are documented as limits. |
+
+## Changes for the corrected launch (1636 to 1668)
 
 Every change from the supplied launch 1636 project is listed here; audit reproduction and
 validation details are in `ADAPTATION.md`.

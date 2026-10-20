@@ -1,6 +1,6 @@
 # IMDEX5 threat model (READ FIRST)
 
-For auditors. `src/Imdex5.sol` is launch 1668's audited and deployed code (`identity-md-launches/launch-1668-the-imdex-5` at `0eada622`) with one change: `mint(shares, maxImdIn, minShares)` reverts `TooFewShares` when fewer than `minShares` shares would be issued. Everything else is unchanged; the diff is about ten lines.
+For auditors. `src/Imdex5.sol` is launch 1668's audited and deployed code (`identity-md-launches/launch-1668-the-imdex-5` at `0eada622`) with: `mint(shares, maxImdIn, minShares)` reverting `TooFewShares` when fewer than `minShares` shares would be issued; the fixes audit 886e7c22 asked for (a residual's short fill is paid at the price it traded at, `submit` checks the attestation's window and quorum, the last holder pays no fee on `redeemToImd`); and the fix audit 3bd5e1aa asked for (a residual whose buy reverts fails the mint instead of being settled at a movable spot price). Everything else is unchanged.
 
 ## Actors
 
@@ -27,7 +27,9 @@ No owner, admin, role, pause or upgrade.
 ## Deliberately not findings (accepted, documented)
 
 - A coin in the list whose pool dies blocks `mint` until a `rebalance` drops it; `redeem` still works.
-- A residual (a coin that left the list and could not yet be sold) never blocks `mint`: the mint buys what its pool gives, and pays whatever the pool cannot give at that pool's current price into the holders' idle IMD. Holders keep their value; they hold a little less of that coin and a little more IMD. The price is the pool's spot price, so a thin residual pool can be moved; the exposure is limited to the residual's share of the index, and moving the price costs the mover.
+- A residual (a coin that left the list and could not yet be sold) is bought by `mint` like any holding. A residual whose pool trades but fills short (a transfer tax, liquidity that ran out) does not block `mint`: the shortfall is paid at the price the pool just traded at into the holders' idle IMD. Holders keep their value; they hold a little less of that coin and a little more IMD. That price is the one the mint's own buy moved to, so it is at or above the price before the buy; moving it first costs the mover what the buy returns. A residual whose pool rejects the index's buy outright (a dead pool, a hook that reverts, burns gas or leaves a delta, a swap that needs more than `SWAP_GAS`) is a failed buy: `mint` reverts `BuyFailed` and takes nothing, as for a dead list coin, until the pool works again or a `rebalance` sells the residual; `redeem` and `redeemToImd` keep working. Settling such a buy at the pool's spot price (audit 3bd5e1aa) let a minter move that price first and take the residual from holders for pool fees and gas.
+- A residual pool with no liquidity left in the buy direction: Uniswap v4 fills what it can and leaves the price at the limit, so the shortfall's charge is astronomical and the mint reverts `TooExpensive`. A mint can request at most what the residual's pool can deliver (audit be08f42a, low; documented, not redesigned).
+- Residual and idle charges use the requested `shares`; a list coin's short fill reduces `minted` but not the residual fraction bought or charged, so the minter overpays for that fraction by the short fill's ratio and the excess stays with the holders, as any coin bought beyond the issued fraction does (audit 4acb1b2e, low; documented, not redesigned; `minShares` lets the buyer refuse a short fill).
 - Small leftovers (rounding, coins bought beyond the issued fraction) stay with existing holders.
 - SwarmCity's 2% transfer tax costs a minter about 2% of shares (the floor at 97% passes).
 - A round trip (mint then redeem) costs about 3-5% (two 0.50% fees, pool fees, the tax).
@@ -39,4 +41,4 @@ Critical: holders' or minters' funds can be taken or frozen by anyone. High: fun
 
 ## Tests
 
-135 unit and fuzz tests against mocks (`forge test --no-match-path 'test/Fix3*'`), including the floor (`test_sliverFillBelowFloorRevertsAndRollsBack`, `test_fullFillPassesFloor`). 8 mainnet fork tests (`test/Fix3*.fork.t.sol`): mint and redeem at 10, 100 and 1,000 IMD; rebalance to three, four and the same five coins; floor passes at 97% and cancels at 99%; an oversized buy is cancelled by the floor.
+145 unit and fuzz tests against mocks (`forge test`), including the floor (`test_sliverFillBelowFloorRevertsAndRollsBack`, `test_fullFillPassesFloor`) and the residual attacks (`test/Imdex5ResidualSpot.t.sol`: a dumped residual whose buy reverts cannot be minted at spot, at any price; a residual hook that burns gas or leaves a delta fails the mint; a dumped pool that trades is bought in full and dilutes nobody; a short fill is charged at least its fair value). 8 mainnet fork tests (`test/Fix3*.fork.t.sol`, skipped without `--fork-url`): mint and redeem at 10, 100 and 1,000 IMD; rebalance to three, four and the same five coins; floor passes at 97% and cancels at 99%; an oversized buy is cancelled by the floor.

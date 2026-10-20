@@ -7,6 +7,89 @@ dependencies remain unchanged: solc 0.8.26, optimizer 200 runs, via IR, Cancun, 
 No deployment, signing or broadcasting is performed by this work. The existing manifest is
 untouched; launch handoff belongs to the subsequent manifest/deployment step.
 
+## This launch: the code of 1668 with the 886e7c22 fixes, audited again
+
+The repository arrived at commit `6ee29fbc` (launch 1668's code, the minimum-shares floor on
+`mint`, and the fixes audit 886e7c22 asked for). The brief: deploy it as it is, fix every finding
+of medium or above from the new audit with the smallest change, document the rest, keep
+everything else. One contract, `Imdex5`, no constructor arguments, no owner, no launch token.
+
+### Changes
+
+1. **`src/Imdex5.sol`, `_mintMore`, residual branch (audit 3bd5e1aa, medium, reproduced and
+   fixed).** The `catch` of the residual's `swapSelf` now does `revert BuyFailed(coin.token)`
+   instead of falling through to the spot-price charge. The short-fill path (`got < need` after a
+   swap that succeeded) is unchanged: the pool traded, and the price read after the buy is one the
+   mint's own buy moved up to. Nothing else in the contract changed; the mint NatSpec already said
+   a buy that fails reverts. Runtime 23,230 to 23,266 bytes.
+2. **`test/Imdex5ResidualSpot.t.sol` (new).** The audit's reproduction, now asserting the fix:
+   alice holds the whole index, the list drops coin 5 whose limited sale leaves a residual worth
+   about 98 IMD, the attacker moves the residual pool's price down 1,000x and makes the index's buy
+   revert (mock `dead`; on mainnet a hook rule or a swap that cannot finish inside `SWAP_GAS`), bob
+   mints `shares = totalSupply`: the mint reverts `BuyFailed(coin5)`, bob keeps every IMD, `held`
+   and `idleImd` are unchanged and alice's full redeem pays her the whole residual. Fuzzed over
+   every dump factor up to a million and every size up to twice the supply. Two hook variants on
+   MARG as a residual (a hook that burns all gas; one that leaves a delta unsettled) also revert
+   `BuyFailed` and take nothing, and the mint buys the residual proportionally once the hook
+   behaves. A dumped pool that still trades is bought in full (`held` grows by exactly the ceiling
+   fraction, equals the balance, holders keep at least as much per share, idle grows by the issued
+   fraction only), fuzzed. A short fill is charged at least the shortfall's fair value.
+3. **`test/Imdex5Edges.t.sol`.** The test that pinned the old rule (a dead residual is charged at
+   spot and does not block mint) now asserts the new one: `BuyFailed`, no IMD taken, redeem and
+   redeemToImd keep paying the residual in kind, and the mint buys it again once the pool is back.
+4. **`test/Imdex5.invariant.t.sol`.** Comment only. The mint handler already absorbs a reverting
+   mint; a residual's short fill is still checked to be paid into idle.
+5. **`test/Fix3.fork.t.sol`, `test/Fix3Floor.fork.t.sol`, `test/Fix3Rebalance.fork.t.sol`.** Each
+   skips (`vm.skip(true)`) when the mainnet IMD address has no code. Before, a plain `forge test`
+   with no network failed 7 of them (`EvmError: Revert` deploying against absent contracts); the
+   acceptance criteria want `forge test` to pass with the project's own configuration and the
+   verifier runs with no network. With `--fork-url` they run exactly as before.
+6. **`README.md`, `THREAT_MODEL.md`.** Describe the shipped behaviour (the informational finding
+   357a7068): `submit` checks the signed quorum and the validity window; a residual whose buy
+   reverts blocks mint while a short fill does not; the low and informational findings are listed
+   as documented limits. Runtime size and test counts updated.
+
+### The audit's findings, reproduced
+
+- **Medium, `3bd5e1aa…`: reproduced, fixed (change 1).** On the unchanged code, with the state
+  above (residual of 9,607.79 coin 5 worth 97.95 IMD at the undisturbed price, pool dumped 1,000x
+  and dead), bob's `mint(995e18, 100,000e18, 0)` succeeded: bob received 995e18 shares (half the
+  index) for 944.03 IMD, `held[coin5]` was unchanged, and the residual half (fair value 48.98 IMD)
+  was charged at 0.096 IMD into idle IMD. After the fix the same call reverts `BuyFailed(coin5)`
+  and takes nothing. The successful-buy path was checked too: a dumped pool that trades delivers
+  the full fraction, so holders are not diluted and the minter gains only what the pool priced.
+- **Low, `be08f42a…` (a residual pool with no buy-side liquidity blocks mint through
+  `TooExpensive`): not reproducible against the mock,** which leaves the price where a partial
+  fill stopped rather than at the limit as v4 does; the reasoning about v4 is correct. Documented
+  in README (Security notes) and THREAT_MODEL as a bound: a mint can request at most what every
+  residual's pool can deliver. Not redesigned, as the brief asks for low findings. The audit's
+  alternative (treat `got == 0` as `BuyFailed`) would not change the outcome on v4, where that
+  case already reverts `TooExpensive`.
+- **Low, `4acb1b2e…` (residual and idle charges use the requested `shares` after a list coin's
+  short fill): reproduced by reading the code** (`need` for every coin is `held * shares /
+  supply`; `minted` only lowers the idle contribution). Documented in README and THREAT_MODEL; a
+  buyer who refuses a short fill sets `minShares`. Not redesigned.
+- **Info, `357a7068…` (README out of date): reproduced, fixed by documentation (change 6).**
+- **Info, `57e3696c…` (`submit` does not compare `requestId` or `questionHash`): confirmed as
+  described,** no change of outcome; documented in README (Security notes).
+- **Info, `f094a9a7…` (`ask` debits `feeImd` before the Intake pulls): confirmed as a trust
+  assumption** on the version 2 Intake; documented in README (Security notes).
+
+### Validation
+
+```sh
+forge build --sizes
+FOUNDRY_FUZZ_SEED=0x2934a24a147e5e24f611da550ab8a7b8fb388d8b1ed6efb669d70fab713eec2a forge test
+```
+
+Imdex5 runtime 23,266 bytes (1,310 bytes under EIP-170), initcode 25,841 bytes, nonpayable
+constructor with no arguments, no DELEGATECALL, CALLCODE or SELFDESTRUCT. 145 tests pass, 7 fork
+tests skip without a fork URL; all suites use local mocks and read no environment. The fork
+tests were not run here (no RPC); their code is unchanged apart from the skip guard.
+
+The protected floor is unchanged in what it needs: one contract, deployed with zero ETH and no
+arguments, no owner or admin, and so nothing assigned to the factory or to IMD.
+
 ## Changes and reasons
 
 1. **`src/Imdex5.sol`, `_swap`:** measure the output-token balance immediately before and after

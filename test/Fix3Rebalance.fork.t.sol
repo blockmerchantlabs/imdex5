@@ -19,23 +19,42 @@ contract Fix3RebalanceForkTest is Test {
 
     function _attestation(uint64[] memory list) internal view returns (OracleAttestation.Attestation memory a) {
         bytes32[] memory ids = new bytes32[](list.length);
-        for (uint256 i; i < list.length; ++i) ids[i] = bytes32(uint256(list[i]));
+        for (uint256 i; i < list.length; ++i) {
+            ids[i] = bytes32(uint256(list[i]));
+        }
         a = OracleAttestation.Attestation({
-            requestId: keccak256("oracle uuid"), chainId: 1, questionHash: keccak256("question"),
-            answerType: OracleAttestation.ANSWER_BYTES32_LIST, answer: abi.encode(ids), figure: 0,
-            fromBlock: 100, toBlock: 200, blockHash: bytes32(uint256(7)), panelJobId: keccak256("panel"),
-            panelSize: 5, quorum: 4, agreed: 5, issuedAt: uint64(block.timestamp), expiresAt: uint64(block.timestamp + 86_400)
+            requestId: keccak256("oracle uuid"),
+            chainId: 1,
+            questionHash: keccak256("question"),
+            answerType: OracleAttestation.ANSWER_BYTES32_LIST,
+            answer: abi.encode(ids),
+            figure: 0,
+            fromBlock: 100,
+            toBlock: 200,
+            blockHash: bytes32(uint256(7)),
+            panelJobId: keccak256("panel"),
+            panelSize: 5,
+            quorum: 4,
+            agreed: 5,
+            issuedAt: uint64(block.timestamp),
+            expiresAt: uint64(block.timestamp + 86_400)
         });
     }
 
     function _backed(string memory when) internal {
         Imdex5.Coin[] memory cs = X.coins();
         for (uint256 i; i < cs.length; ++i) {
-            assertEq(IERC20(cs[i].token).balanceOf(address(X)), X.held(cs[i].token), string.concat("recorded equals real, ", when));
+            assertEq(
+                IERC20(cs[i].token).balanceOf(address(X)),
+                X.held(cs[i].token),
+                string.concat("recorded equals real, ", when)
+            );
         }
     }
 
     function _run(uint256 first, uint64[] memory next) internal {
+        // a fork test: without the mainnet contracts (no --fork-url) it is skipped, not failed
+        if (IMD.code.length == 0) vm.skip(true);
         X = new Imdex5();
         vm.etch(X.ORACLE_SIGNER(), address(new MockSigner(vm.addr(KEY_PK))).code);
         address[2] memory who = [alice, bob];
@@ -82,7 +101,9 @@ contract Fix3RebalanceForkTest is Test {
             emit log_named_decimal_uint("    held", X.held(afterList[i].token), 18);
         }
         emit log_named_decimal_uint("idle IMD after the rebalance", X.idleImd(), 18);
-        emit log_named_decimal_uint("keeper earned IMD for ask, submit and rebalance", IERC20(IMD).balanceOf(keeper), 18);
+        emit log_named_decimal_uint(
+            "keeper earned IMD for ask, submit and rebalance", IERC20(IMD).balanceOf(keeper), 18
+        );
 
         // A second rebalance needs a new list; everyone can still leave.
         uint256 bobShares = X.balanceOf(bob);
@@ -103,19 +124,28 @@ contract Fix3RebalanceForkTest is Test {
 
     function test_dropTheTaxedCoin_fourRemain() public {
         uint64[] memory next = new uint64[](4);
-        next[0] = 1282; next[1] = 1283; next[2] = 737; next[3] = 1075;
+        next[0] = 1282;
+        next[1] = 1283;
+        next[2] = 737;
+        next[3] = 1075;
         _run(100 ether, next);
     }
 
     function test_reorderSameFive() public {
         uint64[] memory next = new uint64[](5);
-        next[0] = 1283; next[1] = 1282; next[2] = 737; next[3] = 1175; next[4] = 1075;
+        next[0] = 1283;
+        next[1] = 1282;
+        next[2] = 737;
+        next[3] = 1175;
+        next[4] = 1075;
         _run(100 ether, next);
     }
 
     function test_shrinkToThree_bigFund() public {
         uint64[] memory next = new uint64[](3);
-        next[0] = 1282; next[1] = 1283; next[2] = 737;
+        next[0] = 1282;
+        next[1] = 1283;
+        next[2] = 737;
         _run(1_000 ether, next);
     }
 }

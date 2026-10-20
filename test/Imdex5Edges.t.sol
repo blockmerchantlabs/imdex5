@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Imdex5} from "../src/Imdex5.sol";
 import {OracleAttestation, OracleAttestationConsumer} from "../src/OracleAttestation.sol";
 import {Imdex5Base} from "./Imdex5Base.sol";
@@ -650,9 +651,12 @@ contract Imdex5EdgesTest is Imdex5Base {
         assertGe(v0, total * 24 / 100, "trimmed below a quarter");
     }
 
-    /// Audit finding 1 (medium): a dead residual no longer blocks mint. The minter pays what the
-    /// residual's pool could not give, at its current price, into the holders' idle IMD.
-    function test_residualsAreRedeemedAndADeadOneDoesNotBlockMint() public {
+    /// Audit 886e7c22 finding 1 (medium) as corrected by audit 3bd5e1aa (medium): a residual whose
+    /// pool rejects the index's buy outright is a failed buy, so `mint` reverts `BuyFailed` and
+    /// takes nothing, exactly as a dead list coin does; settling it at a spot price nobody paid
+    /// would let the minter move that price first. Redeems keep working; once the pool works
+    /// again, mint buys the residual proportionally.
+    function test_residualsAreRedeemedAndADeadOneBlocksMintWithoutTakingImd() public {
         _mintFirst(alice, 1000e18);
         _deliverList(_launches(4));
         pm.setDead(_key(tokens[4], hooks[4]), true);
@@ -662,37 +666,33 @@ contract Imdex5EdgesTest is Imdex5Base {
         assertEq(index.listCount(), 4);
         uint256 heldDead = index.held(tokens[4]);
         uint256 idleBefore = index.idleImd();
+        uint256 bobImd = imd.balanceOf(bob);
         vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Imdex5.BuyFailed.selector, tokens[4]));
         index.mint(1e18, 100e18, 1e18);
-        assertEq(index.balanceOf(bob), 1e18, "full shares despite the dead residual");
-        assertEq(index.held(tokens[4]), heldDead, "nothing bought from the dead pool");
-        assertGt(index.idleImd(), idleBefore, "the residual's value was paid into idle IMD");
-        // another cycle: mint keeps working while the pool stays dead
-        vm.warp(vm.getBlockTimestamp() + 7 days);
-        _deliverList(_launches(4));
-        vm.prank(bob);
-        index.rebalance();
-        vm.prank(bob);
-        index.mint(1e18, 100e18, 1e18);
-        assertEq(index.balanceOf(bob), 2e18);
+        assertEq(index.balanceOf(bob), 0, "no shares against a residual nobody could buy");
+        assertEq(imd.balanceOf(bob), bobImd, "a reverted mint took IMD");
+        assertEq(index.held(tokens[4]), heldDead);
+        assertEq(index.idleImd(), idleBefore);
         // never redeem: alice gets her share of the residual in kind
-        uint256 heldE = index.held(tokens[4]);
         uint256 supplyNow = index.totalSupply();
         vm.prank(alice);
         index.redeem(199e18);
-        assertEq(MockERC20(tokens[4]).balanceOf(alice), heldE * 199e18 * 9950 / (supplyNow * 10_000));
+        assertEq(MockERC20(tokens[4]).balanceOf(alice), heldDead * 199e18 * 9950 / (supplyNow * 10_000));
         // redeemToImd pays the dead residual in kind and the rest in IMD
         uint256 imdBefore = imd.balanceOf(alice);
         vm.prank(alice);
         index.redeemToImd(199e18, 0);
         assertGt(imd.balanceOf(alice), imdBefore);
-        assertGt(MockERC20(tokens[4]).balanceOf(alice), heldE * 199e18 * 9950 / (supplyNow * 10_000));
+        assertGt(MockERC20(tokens[4]).balanceOf(alice), heldDead * 199e18 * 9950 / (supplyNow * 10_000));
         // once the pool is back, mint buys the residual proportionally again
         pm.setDead(_key(tokens[4], hooks[4]), false);
         uint256 heldE2 = index.held(tokens[4]);
+        uint256 supply2 = index.totalSupply();
         vm.prank(bob);
-        index.mint(1e18, 100e18, 0);
-        assertGt(index.held(tokens[4]), heldE2);
+        index.mint(1e18, 100e18, 1e18);
+        assertEq(index.balanceOf(bob), 1e18);
+        assertEq(index.held(tokens[4]), heldE2 + Math.mulDiv(heldE2, 1e18, supply2, Math.Rounding.Ceil));
         _assertImdAccounting();
     }
 

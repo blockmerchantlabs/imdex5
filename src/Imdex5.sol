@@ -192,7 +192,8 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
         if (totalSupply() == 0) revert FirstMintOnly();
         if (shares == 0) revert ZeroAmount();
         IERC20(IMD).safeTransferFrom(msg.sender, address(this), maxImdIn);
-        IPoolManager(POOL_MANAGER).unlock(abi.encode(Op.Mint, msg.sender, shares, maxImdIn, minShares, new uint256[](0)));
+        IPoolManager(POOL_MANAGER)
+            .unlock(abi.encode(Op.Mint, msg.sender, shares, maxImdIn, minShares, new uint256[](0)));
     }
 
     // ---- redeem ----
@@ -398,9 +399,12 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
             uint256 need = Math.mulDiv(held[coin.token], shares, supply, Math.Rounding.Ceil);
             if (need == 0) continue;
             if (i >= listCount) {
-                // a residual (left the list, not yet sold) never blocks mint: buy what its pool
-                // gives; whatever it cannot give is paid at its pool's current price into the
-                // holders' idle IMD, so holders are not diluted
+                // a residual (left the list, not yet sold): buy what its pool gives; whatever it
+                // cannot give (a transfer tax, liquidity that ran out) is paid at the price the
+                // pool just traded at into the holders' idle IMD, so holders are not diluted. A
+                // buy that reverts outright is a failed buy, as for a list coin: its pool traded
+                // at no price, and settling at a spot price nobody paid would let a minter move
+                // that price first and take the residual from holders (audit 3bd5e1aa).
                 uint256 got = 0;
                 try this.swapSelf{gas: SWAP_GAS}(coin.token, coin.hook, true, need, true, false) returns (
                     uint256 rIn, uint256 rOut
@@ -409,7 +413,7 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
                     held[coin.token] += rOut;
                     got = rOut;
                 } catch {
-                    emit SwapSkipped(coin.token, true, need);
+                    revert BuyFailed(coin.token);
                 }
                 if (got < need) {
                     charged += _amountValue(

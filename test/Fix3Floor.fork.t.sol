@@ -13,11 +13,18 @@ contract Fix3FloorForkTest is Test {
     address bob = address(0xB0B);
 
     function setUp() public {
+        // a fork test: without the mainnet contracts (no --fork-url) it is skipped, not failed
+        if (IMD.code.length == 0) vm.skip(true);
         X = new Imdex5();
         address[2] memory who = [alice, bob];
-        for (uint256 i; i < 2; ++i) { deal(IMD, who[i], 100_000 ether); vm.prank(who[i]); IERC20(IMD).approve(address(X), type(uint256).max); }
+        for (uint256 i; i < 2; ++i) {
+            deal(IMD, who[i], 100_000 ether);
+            vm.prank(who[i]);
+            IERC20(IMD).approve(address(X), type(uint256).max);
+        }
         uint256[] memory minOut = new uint256[](5);
-        vm.prank(alice); X.mintFirst(100 ether, minOut);
+        vm.prank(alice);
+        X.mintFirst(100 ether, minOut);
     }
 
     /// SwarmCity keeps 2%, so a buy issues about 98% of the shares asked. A floor at 97% passes; a floor at 99% cancels
@@ -41,7 +48,7 @@ contract Fix3FloorForkTest is Test {
     /// rest; with a floor it cancels.
     function test_oversizedBuy_isCancelledByTheFloor() public {
         uint256 supply = X.totalSupply();
-        uint256 ask = supply * 2000;                    // 2,000 times the index, far beyond the pools' depth
+        uint256 ask = supply * 2000; // 2,000 times the index, far beyond the pools' depth
         uint256 b0 = IERC20(IMD).balanceOf(bob);
         vm.prank(bob);
         vm.expectRevert();
@@ -53,6 +60,8 @@ contract Fix3FloorForkTest is Test {
             emit log_named_decimal_uint("no floor: asked", ask, 18);
             emit log_named_decimal_uint("no floor: issued", X.balanceOf(bob), 18);
             emit log_named_decimal_uint("no floor: paid IMD", b0 - IERC20(IMD).balanceOf(bob), 18);
-        } catch { emit log_string("no floor: the buy reverted for another reason (cost above the cap or a failed buy)"); }
+        } catch {
+            emit log_string("no floor: the buy reverted for another reason (cost above the cap or a failed buy)");
+        }
     }
 }

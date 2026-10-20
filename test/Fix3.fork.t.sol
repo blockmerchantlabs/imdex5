@@ -15,6 +15,8 @@ contract Fix3ForkTest is Test {
     address carol = address(0xCA401);
 
     function _run(uint256 first) internal {
+        // a fork test: without the mainnet contracts (no --fork-url) it is skipped, not failed
+        if (IMD.code.length == 0) vm.skip(true);
         X = new Imdex5();
         Imdex5.Coin[] memory cs = X.coins();
         address[3] memory who = [alice, bob, carol];
@@ -38,7 +40,9 @@ contract Fix3ForkTest is Test {
         emit log_named_decimal_uint("Bob was issued shares", bobShares, 18);
         emit log_named_decimal_uint("Bob paid IMD", bobPaid, 18);
         assertLe(bobShares, aliceShares / 2);
-        assertApproxEqRel(bobShares, aliceShares / 2, 0.021e18, "scaled down by no more than the 2% the taxed coin kept");
+        assertApproxEqRel(
+            bobShares, aliceShares / 2, 0.021e18, "scaled down by no more than the 2% the taxed coin kept"
+        );
         _checkBacked(cs, "after the later mint");
 
         vm.prank(carol);
@@ -71,11 +75,23 @@ contract Fix3ForkTest is Test {
 
     function _checkBacked(Imdex5.Coin[] memory cs, string memory when) internal {
         for (uint256 i; i < 5; ++i) {
-            assertEq(IERC20(cs[i].token).balanceOf(address(X)), X.held(cs[i].token), string.concat("recorded equals real, ", when));
+            assertEq(
+                IERC20(cs[i].token).balanceOf(address(X)),
+                X.held(cs[i].token),
+                string.concat("recorded equals real, ", when)
+            );
         }
     }
 
-    function test_fixed_with_10_IMD() public { _run(10 ether); }
-    function test_fixed_with_100_IMD() public { _run(100 ether); }
-    function test_fixed_with_1000_IMD() public { _run(1_000 ether); }
+    function test_fixed_with_10_IMD() public {
+        _run(10 ether);
+    }
+
+    function test_fixed_with_100_IMD() public {
+        _run(100 ether);
+    }
+
+    function test_fixed_with_1000_IMD() public {
+        _run(1_000 ether);
+    }
 }

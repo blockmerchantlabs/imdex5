@@ -138,8 +138,10 @@ contract Imdex5Handler is CommonBase, StdUtils {
                 if (need == 0) continue;
                 uint256 received = MockERC20(tokens[i]).balanceOf(address(index)) - balancesBefore[i];
                 if (residual[i]) {
-                    // audit finding 1: a residual never cuts the mint; what its pool could not
-                    // give is paid into idle IMD at its price (checked below)
+                    // audit 886e7c22 finding 1: a residual's short fill never cuts the mint; what
+                    // its pool could not give is paid into idle IMD at the price it traded at
+                    // (checked below). A residual whose buy reverts fails the mint (audit
+                    // 3bd5e1aa), which the catch below absorbs like any other revert.
                     if (received < need) residualShort = true;
                     continue;
                 }
@@ -151,7 +153,9 @@ contract Imdex5Handler is CommonBase, StdUtils {
             if (residualShort) {
                 require(index.idleImd() - idleBefore >= idleFraction, "a residual's shortfall was not paid into idle");
             } else {
-                require(index.idleImd() - idleBefore == idleFraction, "idle charged other than the issued shares' fraction");
+                require(
+                    index.idleImd() - idleBefore == idleFraction, "idle charged other than the issued shares' fraction"
+                );
             }
             require(paid <= maxIn, "mint pulled more than maxImdIn");
             require(index.feeImd() >= feeBefore, "mint reduced feeImd");
