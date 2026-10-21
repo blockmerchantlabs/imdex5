@@ -12,7 +12,7 @@ Contracts only: no launch token, pool or website.
 
 | Path | What |
 | --- | --- |
-| `src/Imdex5.sol` | The index. One contract, no constructor arguments, 23,266 bytes of runtime. |
+| `src/Imdex5.sol` | The index. One contract, no constructor arguments, 23,552 bytes of runtime. |
 | `src/OracleAttestation.sol` | The protocol's `OracleAttestation` library and `OracleAttestationConsumer`, copied whole from the oracle-consumer reference. |
 | `src/Interfaces.sol` | The slices of the Uniswap v4 `PoolManager`, the launch registries and the Intake that the index calls. |
 | `test/Imdex5.t.sol` | Behaviour, failure and attack tests against mocks. |
@@ -109,8 +109,8 @@ The invariant suites check these equalities with both plain coins and a SwarmCit
   `idleImd * minted / totalSupply` (rounded up) to `idleImd`: the idle contribution follows the
   shares issued, not the shares asked for, so a short fill never charges idle IMD the new shares
   do not own. It issues and emits `minted`. Reverts if the total exceeds
-  `maxImdIn`, if the total is zero (a share is never issued for nothing), if a buy reverts or
-  delivers nothing, if the resulting shares round to zero, or if they are fewer than `minShares` (`TooFewShares(minted)`; every buy rolls back and nothing is paid). No price is read; no cap.
+  `maxImdIn`, if the total is zero (a share is never issued for nothing), if a buy reverts, if a list
+  coin's buy delivers nothing, if the resulting shares round to zero, or if they are fewer than `minShares` (`TooFewShares(minted)`; every buy rolls back and nothing is paid). No price is read; no cap.
   A list coin whose holding is zero (its
   buy was skipped at the last rebalance) is not bought by `mint`, exactly as `held * f` says;
   the next `rebalance` buys it from idle IMD.
@@ -281,7 +281,23 @@ Nothing is owned. After launch:
 - The launch deploys `Imdex5` from its bytecode as built, with no arguments. No `launch.json` is
   written here; the manifest step writes it.
 
-## Changes for this launch (from launch 1668's code with the 886e7c22 fixes)
+## Changes for this launch (from launch 2343's code)
+
+In-house audit of launch 2343's deployed code against audit 705dd677 (run on an earlier commit):
+its medium and two lows were still open and are fixed here.
+
+| File | Change and reason |
+| --- | --- |
+| `src/Imdex5.sol` | `swapSelf`: a swap that is not exact-output and takes its input but delivers nothing reverts `NothingOut`, so `rebalance` (`_tryBuy`, `_trySell`) and `redeemToImd` skip it instead of booking it (audit 705dd677, medium: rebalance spent idle IMD for no coins and sold coins for no IMD). A rebalance (`limited`) swap must also deliver at least half its input's value at the pool's price before the swap, or it reverts `PoorFill` and is skipped: without it a pool paying 1 wei passed the zero check. A hook may still keep up to half on a rebalance swap; that is the accepted bound. A mint's exact-output residual buy is exempt from both, so a short fill there is still charged at the pool price and mint stays open. |
+| `src/Imdex5.sol` | `_swap`: the swap amount is converted with `SafeCast.toInt256` (audit 705dd677, low). `_mintMore`: `minShares > shares` reverts `TooFewShares` before any buy (audit 705dd677, low). |
+| `test/Imdex5RebalanceNothingOut.t.sol` | New: rebalance buy and sell that pay nothing are skipped (both fail on launch 2343's code); a buy that pays 1 wei is skipped, one that pays 60% trades. |
+| `test/Imdex5Revised.t.sol`, `test/Imdex5TaxEverywhere.t.sol` | Tests that pinned the old booking now assert the skip; a `redeemToImd` sale that would pay nothing pays that coin in kind. |
+| `THREAT_MODEL.md`, `README.md` | Describe the shipped behaviour. Runtime 23,552 bytes; 171 unit and fuzz tests and 8 mainnet fork tests pass. |
+
+Known limit, documented (not redesigned for this launch): a residual whose pool rejects every buy
+forever blocks `mint` until a `rebalance` sells it; `redeem` and `redeemToImd` keep paying.
+
+## Changes for launch 2343 (from launch 1668's code with the 886e7c22 fixes)
 
 Audit of the code as it arrived: 1 medium, 2 low, 3 informational. The medium is fixed; the
 rest are documented above (Mint, Oracle and Security notes). Reproductions are in

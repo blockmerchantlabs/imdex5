@@ -190,7 +190,7 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
     /// idle IMD proportional to the shares issued, plus 0.50% of the buys' cost as fee. `maxImdIn`
     /// is pulled first and the unspent part refunded. Short fills reduce shares to the least
     /// delivered fraction; every buy is still paid. Reverts if the cost exceeds the limit, is
-    /// nothing, a buy fails, a buy delivers nothing, or the delivered fraction rounds to zero shares.
+    /// nothing, a buy fails, a list coin's buy delivers nothing, or the delivered fraction rounds to zero shares.
     function mint(uint256 shares, uint256 maxImdIn, uint256 minShares) external nonReentrant {
         if (totalSupply() == 0) revert FirstMintOnly();
         if (shares == 0) revert ZeroAmount();
