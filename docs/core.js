@@ -222,8 +222,8 @@
   // The first mint spends (budget less the 0.50% fee) in equal parts on the listed coins. Each
   // coin must deliver at least FIRST_MIN_BPS of what its part buys at the pool's spot price, so
   // a pool that pays dust fails the whole mint instead of taking its fifth (pool fee 1.25%, a
-  // transfer tax up to 2% and price impact all fit inside the 10% margin).
-  const FIRST_MIN_BPS = 9000n;
+  // transfer tax up to 2% and price impact fit inside the 7% margin; the fork test delivered 96-98%).
+  const FIRST_MIN_BPS = 9300n;
   function firstMintMinOut(s, budget) {
     const listed = s.rows.filter((r) => r.listed);
     const part = (budget * 9950n) / 10000n / BigInt(listed.length);

@@ -1,97 +1,18 @@
 <!doctype html>
-<html lang="en" data-theme="slate">
+<html lang="en" data-theme="stone">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src https://ethereum-rpc.publicnode.com https://eth.llamarpc.com https://cloudflare-eth.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>The Imdex 5 ($IMDEX5)</title>
 <meta name="description" content="The five largest tokens paired with IMD on Ethereum, in one coin. Mint with IMD, redeem for the coins or for IMD. No owner, no admin.">
-<meta name="theme-color" content="#1C2128">
+<meta name="theme-color" content="#ECE8E1">
 <meta property="og:title" content="The Imdex 5 ($IMDEX5)">
 <meta property="og:description" content="The five largest IMD-paired tokens on Ethereum, in one coin.">
 <meta property="og:image" content="banner.png">
 <link rel="icon" href="favicon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-/* VIMD Family v3 tokens (github.com/blockmerchantlabs/vimd-family) */
-:root, [data-theme="slate"] { --paper:#1C2128; --ink:#E8E4DC; --dim:#A3A9B1; --faint:#6E7681; --mute:#4A525C; --soft:#2A313A; --hover:#242A32; --accent:#D8C398; --ok:#3ECF7A; --alarm:#FF6B62; }
-[data-theme="stone"] { --paper:#ECE8E1; --ink:#222831; --dim:#5A6068; --faint:#7D828A; --mute:#B9B4AB; --soft:#DCD7CE; --hover:#E4DFD7; --accent:#7A5F30; --ok:#13703C; --alarm:#B3261E; }
-[data-theme="white"] { --paper:#FFFFFF; --ink:#000000; --dim:#555555; --faint:#8C8C8C; --mute:#BBBBBB; --soft:#E6E6E6; --hover:#F4F4F4; --accent:#8A6D3B; --ok:#13793F; --alarm:#B3261E; }
-[data-theme="black"] { --paper:#000000; --ink:#FFFFFF; --dim:#9A9A9A; --faint:#666666; --mute:#4A4A4A; --soft:#262626; --hover:#141414; --accent:#D8C398; --ok:#3ECF7A; --alarm:#FF6B62; }
-* { box-sizing: border-box; }
-html, body { margin: 0; background: var(--paper); color: var(--ink); }
-body { font: 13px/1.5 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
-a { color: var(--accent); }
-.wrap { max-width: 1100px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 34px); }
-header.top { border-bottom: 1.5px solid var(--ink); }
-header.top .wrap { display: flex; align-items: center; gap: 12px; height: 56px; }
-header.top img { width: 28px; height: 28px; border-radius: 50%; }
-header.top .name { font-weight: 600; }
-header.top .sp { flex: 1; }
-.label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
-h1 { font-size: 28px; font-weight: 500; margin: 0 0 6px; }
-h2 { font-size: 18px; font-weight: 500; margin: 0 0 12px; }
-button, .btn { font: inherit; height: 40px; padding: 0 14px; background: transparent; color: var(--ink); border: 1.5px solid var(--ink); border-radius: 0; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--hover); }
-button.main { border-color: var(--accent); color: var(--accent); }
-button:disabled { color: var(--mute); border-color: var(--mute); cursor: not-allowed; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-input { font: inherit; height: 40px; padding: 0 10px; width: 100%; background: transparent; color: var(--ink); border: 1.5px solid var(--ink); border-radius: 0; }
-.hero { border-bottom: 1.5px solid var(--ink); }
-.hero img.banner { display: block; width: 100%; height: auto; max-height: 360px; object-fit: cover; }
-.hero .wrap { padding-top: 22px; padding-bottom: 22px; }
-.promise { color: var(--dim); max-width: 64ch; margin: 0; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); border: 1.5px solid var(--ink); margin-top: 18px; }
-.stats > div { padding: 12px 14px; border-right: 1px solid var(--soft); }
-.stats > div:last-child { border-right: 0; }
-.stats .v { font-size: 18px; font-weight: 500; margin-top: 4px; overflow-wrap: anywhere; }
-.stats .s { color: var(--faint); font-size: 11px; }
-section { padding: 26px 0; border-bottom: 1px solid var(--soft); }
-.grid2 { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 24px; align-items: start; }
-.grid2 > * { min-width: 0; }
-.box { border: 1.5px solid var(--ink); padding: 16px; }
-.tablewrap { overflow-x: auto; border: 1.5px solid var(--ink); }
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 500; padding: 10px; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
-td { padding: 10px; border-bottom: 1px solid var(--soft); white-space: nowrap; vertical-align: middle; }
-tr:last-child td { border-bottom: 0; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.seg { display: inline-flex; gap: 2px; vertical-align: middle; margin-right: 8px; }
-.seg i { width: 6px; height: 12px; background: var(--soft); display: block; }
-.seg i.on { background: var(--ink); }
-.tag { font-size: 11px; color: var(--faint); }
-.tabs { display: flex; gap: 0; margin-bottom: 14px; }
-.tabs button { flex: 1; border-right-width: 0; }
-.tabs button:last-child { border-right-width: 1.5px; }
-.tabs button[aria-selected="true"] { background: var(--ink); color: var(--paper); }
-.pane { display: none; }
-.pane.on { display: block; }
-.row { display: flex; gap: 8px; margin: 8px 0; }
-.row > * { flex: 1; }
-.quote { color: var(--dim); min-height: 3em; margin: 8px 0; }
-.status { margin-top: 10px; min-height: 1.5em; }
-.status.err { color: var(--alarm); }
-.status.ok { color: var(--ok); }
-.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
-.kv .k { color: var(--dim); }
-.addr { word-break: break-all; }
-ul.plain { padding-left: 18px; margin: 6px 0; }
-ul.plain li { margin: 4px 0; }
-footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--faint); font-size: 11px; }
-.live::before { content: ""; display: inline-block; width: 8px; height: 8px; background: var(--ok); margin-right: 6px; }
-@media (max-width: 760px) {
-  .stats { grid-template-columns: 1fr 1fr; }
-  .stats > div:nth-child(2) { border-right: 0; }
-  .stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--soft); }
-  .grid2 { grid-template-columns: minmax(0, 1fr); }
-  header.top .tag { display: none; }
-  header.top .name { white-space: nowrap; }
-  h1 { font-size: 22px; }
-  .stats .v { font-size: 15px; }
-  #keepers .row { flex-wrap: wrap; }
-}
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="top"><div class="wrap">
@@ -122,8 +43,8 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
   <div>
     <h2>What is inside</h2>
     <div class="tablewrap"><table>
-      <thead><tr><th>Coin</th><th class="num">Weight</th><th class="num">Per 1 IMDEX5</th><th class="num">Held by the index</th><th class="num">Price (IMD)</th><th class="num">Value (IMD)</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="6">Reading the contract…</td></tr></tbody>
+      <thead><tr><th>Coin</th><th class="num">Weight</th><th class="num">Per 1 IMDEX5</th><th class="num">Price (IMD)</th><th class="num">Value (IMD)</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5">Reading the contract…</td></tr></tbody>
     </table></div>
     <p class="tag">Every figure is read live from Ethereum: holdings from the contract, prices from each coin's Uniswap v4 pool with IMD. The upkeep reserve (<span id="feeres">…</span> IMD) pays only for the weekly question and the keepers' rewards; it is not part of the holders' value.</p>
   </div>
@@ -138,15 +59,15 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
 
     <div class="pane on" id="buy">
       <p class="label">Spend up to (IMD)</p>
-      <div class="row"><input id="buyAmt" inputmode="decimal" placeholder="10"><button id="buyMax" style="flex:0 0 auto">Max</button></div>
+      <div class="row"><input id="buyAmt" inputmode="decimal" placeholder="10"><button id="buyMax" class="fit">Max</button></div>
       <div class="quote" id="buyQuote">Enter an amount.</div>
-      <button class="main" id="buyGo" style="width:100%" disabled>Mint</button>
+      <button class="main full" id="buyGo" disabled>Mint</button>
       <p class="tag">Two wallet steps: approve exactly this much IMD, then mint. The contract buys each coin in its pool; any IMD it did not need comes back in the same transaction. A 0.50% fee goes to the upkeep reserve.</p>
     </div>
 
     <div class="pane" id="sell">
       <p class="label">IMDEX5 to redeem</p>
-      <div class="row"><input id="sellAmt" inputmode="decimal" placeholder="1"><button id="sellMax" style="flex:0 0 auto">Max</button></div>
+      <div class="row"><input id="sellAmt" inputmode="decimal" placeholder="1"><button id="sellMax" class="fit">Max</button></div>
       <div class="quote" id="sellQuote">Enter an amount.</div>
       <div class="row">
         <button class="main" id="sellImd" disabled>Redeem for IMD</button>
@@ -197,7 +118,7 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
       <li><b>Rebalance.</b> Anyone runs it once a new list is in. Coins that left are sold; new ones are bought. Each trade stops at a 1% move in the pool's square-root price (about 2% in price), so a large holding leaves over several weeks.</li>
       <li><b>Minting and redeeming.</b> Minting buys every coin in proportion. Redeeming pays the coins in kind, or sells them for IMD.</li>
     </ul>
-    <h2 style="margin-top:20px">Fees</h2>
+    <h2 class="mt">Fees</h2>
     <ul class="plain">
       <li>0.50% on mints and on redeems; nothing while you hold.</li>
       <li>The pools charge their own 1.25% on every buy and sale. Redeeming for the coins avoids it.</li>
@@ -214,7 +135,7 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
       <span class="k">Source</span><span><a href="https://github.com/identity-md-launches/launch-2361-the-imdex-5" target="_blank" rel="noopener">deployed source</a> · <a href="https://github.com/blockmerchantlabs/imdex5" target="_blank" rel="noopener">development repo</a></span>
       <span class="k">Audits</span><span>Four rounds by the IMD swarm; every medium finding fixed before this deployment. Read the <a href="https://github.com/identity-md-launches/launch-2361-the-imdex-5/blob/main/THREAT_MODEL.md" target="_blank" rel="noopener">threat model</a>.</span>
     </div>
-    <h2 style="margin-top:20px">Risks</h2>
+    <h2 class="mt">Risks</h2>
     <ul class="plain">
       <li>Smart contract risk: audited, not guaranteed. Nobody can pause, upgrade or rescue it.</li>
       <li>The coins are small, volatile tokens with thin pools; the index can fall as fast as they do.</li>

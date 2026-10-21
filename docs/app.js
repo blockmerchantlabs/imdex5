@@ -28,6 +28,20 @@
   function esc(t) {
     return String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
+  // Logos kept in this site (coins/), by token address: from each launch's IMD logo job, and ZTO's
+  // from IMD Radar. A coin without one gets a lettered badge.
+  const LOGOS = {
+    "0x53d0ea0a685220718dc6a0a6e4617194c6f37921": "coins/1282.png",
+    "0xfa0efea559bde229031c2b0a219472316647759c": "coins/1283.png",
+    "0xd782bdea4ef02a0bd391eb9089470c8080f0a68e": "coins/737.png",
+    "0x1ae93a4d9cc0b41c594d00387b6f832a88f729b7": "coins/1175.png",
+  };
+  function logo(r) {
+    const src = LOGOS[r.token.toLowerCase()];
+    if (src) return '<img class="coin" src="' + src + '" alt="" width="24" height="24">';
+    const letters = esc(String(r.symbol).replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "?");
+    return '<span class="coin mono m' + (Number(BigInt(r.token) % 6n)) + '" aria-hidden="true">' + letters + "</span>";
+  }
   function pct(bps) { return (Number(bps) / 100).toFixed(1) + "%"; }
   function short(a) { return a.slice(0, 6) + "…" + a.slice(-4); }
   function when(ts) {
@@ -76,15 +90,14 @@
     let h = "";
     for (const r of s.rows) {
       const name = esc(r.symbol) + ' <span class="tag">#' + r.launch + (r.listed ? "" : " · leaving") + "</span>";
-      h += "<tr><td><a href=\"https://etherscan.io/token/" + r.token + "\" target=\"_blank\" rel=\"noopener\">" + name + "</a></td>" +
+      h += "<tr><td>" + logo(r) + "<a href=\"https://etherscan.io/token/" + r.token + "\" target=\"_blank\" rel=\"noopener\">" + name + "</a></td>" +
         '<td class="num">' + seg(r.weightBps) + pct(r.weightBps) + "</td>" +
         '<td class="num">' + fmt(r.perShare, 2) + "</td>" +
-        '<td class="num">' + fmt(r.held, 0) + "</td>" +
         '<td class="num">' + fmt(r.price, 8) + "</td>" +
         '<td class="num">' + fmt(r.value, 4) + "</td></tr>";
     }
-    h += '<tr><td>Idle IMD <span class="tag">waiting to be invested</span></td><td class="num">' + seg(s.idleWeightBps) + pct(s.idleWeightBps) +
-      '</td><td class="num">' + (s.supply > 0n ? fmt((s.idle * E18) / s.supply, 4) : "0") + '</td><td class="num">' + fmt(s.idle, 4) +
+    h += '<tr><td><span class="coin mono m0" aria-hidden="true">IMD</span>Idle IMD</td><td class="num">' + seg(s.idleWeightBps) + pct(s.idleWeightBps) +
+      '</td><td class="num">' + (s.supply > 0n ? fmt((s.idle * E18) / s.supply, 4) : "0") +
       '</td><td class="num">1</td><td class="num">' + fmt(s.idle, 4) + "</td></tr>";
     $("rows").innerHTML = h;
 
@@ -227,7 +240,7 @@
 
   function wire() {
     $("connect").onclick = connect;
-    const themes = ["slate", "stone", "white", "black"];
+    const themes = ["stone", "white", "slate", "black"];
     try { const t = localStorage.getItem("imdex5-theme"); if (themes.includes(t)) document.documentElement.dataset.theme = t; } catch (_) {}
     $("theme").onclick = () => {
       const t = themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length];
@@ -267,6 +280,11 @@
   }
 
   async function main() {
+    // never run inside someone else's frame: a framed copy could overlay the buttons
+    if (window.top !== window.self) {
+      document.body.textContent = "Open this page directly: https://blockmerchantlabs.github.io/imdex5/";
+      return;
+    }
     wire();
     try {
       reader = await connectReader();
