@@ -415,7 +415,8 @@ contract Imdex5MustAttackTest is Imdex5Base {
     function testFuzz_residualShortFillAtUndisturbedPriceDilutesNobody(uint16 taxBps, uint256 shares) public {
         address r = _residual();
         vm.etch(r, address(new TaxERC20(address(pm))).code);
-        TaxERC20(r).setTax(bound(taxBps, 1, 10_000), false);
+        taxBps = uint16(bound(taxBps, 1, 10_000));
+        TaxERC20(r).setTax(taxBps, false);
         uint256[] memory prices = _prices();
         uint256 supply = index.totalSupply();
         shares = bound(shares, 1e15, supply);

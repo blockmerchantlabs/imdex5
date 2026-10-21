@@ -62,4 +62,45 @@ contract Imdex5RebalanceNothingOutTest is Imdex5Base {
         assertLe(index.idleImd(), idleBefore, "idle grew without a sale");
         assertEq(imd.balanceOf(address(index)), index.idleImd() + index.feeImd(), "imd balance != idle + fee");
     }
+
+    function _boughtOut(Vm.Log[] memory logs, address coin) internal pure returns (uint256) {
+        bytes32 sig = keccak256("Swapped(address,bool,uint256,uint256)");
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].topics[0] != sig || address(uint160(uint256(logs[i].topics[1]))) != coin) continue;
+            (bool b,, uint256 out) = abi.decode(logs[i].data, (bool, uint256, uint256));
+            if (b) return out;
+        }
+        return 0;
+    }
+
+    /// @dev In-house review of 646635a: a pool that pays 1 wei passed `NothingOut`. The
+    /// 50% floor (`PoorFill`) skips it; a pool that keeps 40% still trades.
+    function test_aRebalanceBuyThatPaysDustIsSkippedAndAFairOneTrades() public {
+        _mintFirst(alice, 1000e18);
+        _replaceFifthWithNew();
+        uint256 snap = vm.snapshotState();
+        vm.recordLogs();
+        vm.prank(bob);
+        index.rebalance();
+        uint256 gross = _boughtOut(vm.getRecordedLogs(), NEW_TOKEN);
+        assertGt(gross, 2, "the honest buy did not run");
+        vm.revertToState(snap);
+
+        snap = vm.snapshotState();
+        pm.setShortBy(_key(NEW_TOKEN, HOOK_G), gross - 1); // pays 1 wei
+        vm.recordLogs();
+        vm.prank(bob);
+        index.rebalance();
+        assertTrue(_skipped(vm.getRecordedLogs(), NEW_TOKEN, true), "a dust buy was booked");
+        assertEq(index.held(NEW_TOKEN), 0);
+        assertEq(imd.balanceOf(address(index)), index.idleImd() + index.feeImd(), "imd balance != idle + fee");
+        vm.revertToState(snap);
+
+        pm.setShortBy(_key(NEW_TOKEN, HOOK_G), gross * 40 / 100); // pays 60%
+        vm.recordLogs();
+        vm.prank(bob);
+        index.rebalance();
+        assertFalse(_skipped(vm.getRecordedLogs(), NEW_TOKEN, true), "a 60% fill was skipped");
+        assertEq(index.held(NEW_TOKEN), gross - gross * 40 / 100);
+    }
 }

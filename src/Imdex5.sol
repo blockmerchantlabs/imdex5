@@ -114,6 +114,7 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
     error NoNextList();
     error BadDelta();
     error NothingOut();
+    error PoorFill();
 
     // ---- events ----
     event Funded(address indexed from, uint256 amount);
@@ -365,10 +366,19 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
         returns (uint256 amountIn, uint256 amountOut)
     {
         if (msg.sender != address(this)) revert OnlySelf();
+        uint256 p0 = limited ? _sqrtPrice(_key(token, hook)) : 0;
         (amountIn, amountOut) = _swap(token, hook, buy, amount, exactOut, limited);
         // a swap that takes its input and delivers nothing is a failure, so the caller's
-        // try/catch skips it (rebalance, redeemToImd, residual buys) instead of booking it
-        if (amountIn > 0 && amountOut == 0) revert NothingOut();
+        // try/catch skips it (rebalance, redeemToImd) instead of booking it. A mint's exact-out
+        // residual buy is exempt: its shortfall is charged at the pool price, so mint stays open
+        if (!exactOut && amountIn > 0 && amountOut == 0) revert NothingOut();
+        // a rebalance swap must deliver at least half its input's value at the price before it:
+        // a hook or tax that keeps more is a loss to holders, not a fee, and the swap is skipped
+        if (limited) {
+            uint256 valueIn = buy ? amountIn : _amountValue(token, amountIn, p0, Math.Rounding.Floor);
+            uint256 valueOut = buy ? _amountValue(token, amountOut, p0, Math.Rounding.Floor) : amountOut;
+            if (valueOut * 2 < valueIn) revert PoorFill();
+        }
     }
 
     // ---- internals: operations ----
