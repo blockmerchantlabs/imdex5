@@ -308,11 +308,26 @@
     $("buyGo").onclick = () => {
       const amt = parse($("buyAmt").value);
       const first = state.supply === 0n;
-      run(first ? "First mint" : "Mint", (s, step) => X.mintFor(ethers, s, amt, SLIP_BPS, step), first ? "first" : "mint");
+      // the figures on screen: the transaction never signs below them
+      let shown = null;
+      try {
+        shown = first ? { minOut: X.firstMintMinOut(state, amt) } : { minShares: X.quoteMint(state, amt, SLIP_BPS).minShares };
+      } catch (e) {
+        setStatus("No quote: " + e.message, "err");
+        return;
+      }
+      run(first ? "First mint" : "Mint", (s, step) => X.mintFor(ethers, s, amt, SLIP_BPS, step, shown), first ? "first" : "mint");
     };
     $("sellImd").onclick = () => {
       const amt = parse($("sellAmt").value);
-      run("Redeem for IMD", (s, step) => X.redeemToImdFor(ethers, s, amt, SLIP_BPS, step));
+      let shown = null;
+      try {
+        shown = { minImdOut: (X.quoteRedeemToImd(state, amt) * BigInt(10000 - SLIP_BPS)) / 10000n };
+      } catch (e) {
+        setStatus("No quote: " + e.message, "err");
+        return;
+      }
+      run("Redeem for IMD", (s, step) => X.redeemToImdFor(ethers, s, amt, SLIP_BPS, step, shown));
     };
     $("sellKind").onclick = () => {
       const amt = parse($("sellAmt").value);

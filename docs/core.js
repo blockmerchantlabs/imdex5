@@ -10,6 +10,7 @@
     POOL_FEE: 12500,
     TICK_SPACING: 60,
     POOLS_SLOT: 6n,
+    IMD_ALLOWANCE_SLOT: 6n, // IMD's ERC-20 allowance mapping (checked against allowance() on mainnet)
     DEPLOY_BLOCK: 26242171,
     LAUNCH: 2361,
     CHAIN_ID: 1n,
@@ -242,6 +243,50 @@
     return !!r && (r.name === "TooExpensive" || (r.name === "ERC20InsufficientBalance" && isIndex(r.args && r.args[0])));
   }
 
+  // Finds the revert data inside an RPC error and decodes it with the index ABI, so simulated and
+  // real reverts read the same way.
+  function decodeRevert(ethers, e) {
+    let d = null;
+    for (const c of [e && e.data, e && e.info && e.info.error && e.info.error.data, e && e.error && e.error.data]) {
+      if (typeof c === "string" && c.startsWith("0x")) { d = c; break; }
+      if (c && typeof c.data === "string") { d = c.data; break; }
+    }
+    if (!d || d === "0x") return e;
+    try {
+      const p = new ethers.Interface(INDEX_ABI).parseError(d);
+      if (p) { const err = new Error(p.name); err.revert = { name: p.name, args: p.args }; return err; }
+    } catch (_) {}
+    return e;
+  }
+
+  // Runs the exact call the user is about to sign, as if the IMD approval were already in place,
+  // so no approval is asked for a mint that would fail (audit c104e817 L3; re-review point 20).
+  // It uses the wallet's own node and falls back to a public node only when the wallet's node
+  // does not support state overrides. The allowance override changes nothing else.
+  async function simulateApproved(ethers, signer, data, amount) {
+    const owner = await signer.getAddress();
+    const coder = ethers.AbiCoder.defaultAbiCoder();
+    const slot = ethers.keccak256(coder.encode(["address", "bytes32"],
+      [C.INDEX, ethers.keccak256(coder.encode(["address", "uint256"], [owner, C.IMD_ALLOWANCE_SLOT]))]));
+    const override = { [C.IMD]: { stateDiff: { [slot]: ethers.toBeHex(amount, 32) } } };
+    const tx = { from: owner, to: C.INDEX, data };
+    const providers = [signer.provider, readProvider(ethers)];
+    let lastUnsupported = null;
+    for (const pr of providers) {
+      try {
+        await pr.send("eth_call", [tx, "latest", override]);
+        return;
+      } catch (e) {
+        const r = decodeRevert(ethers, e);
+        if (r.revert) throw r;
+        const m = String((e && (e.shortMessage || e.message)) || "");
+        if (/revert/i.test(m)) throw e;
+        lastUnsupported = e;
+      }
+    }
+    throw new Error("the mint could not be checked before approval (" + ((lastUnsupported && lastUnsupported.shortMessage) || "no node answered") + "); nothing was sent");
+  }
+
   // The later-mint quote, shared by the page and the transaction so both show and sign the same
   // numbers: shares the budget buys at NAV (less the 0.50% fee, the pools' cost and a margin), and
   // the floor the page shows as "at least".
@@ -266,35 +311,47 @@
     await tx.wait();
   }
 
-  // Mint for a budget of `budget` IMD. Returns the receipt. Every limit is fixed from one read of
-  // the wallet's own node before any wallet prompt (audit c104e817, L3), and the signed floor is
-  // never below the "at least" the page showed (M1): a retry after TooExpensive lowers the shares
-  // asked for, never the floor, and stops once the shares would fall under it.
-  async function mintFor(ethers, signer, budget, slipBps, onStep) {
+  // Mint for a budget of `budget` IMD. Returns the receipt.
+  // - Limits are computed from the wallet's node and never signed below what the page showed
+  //   (`shown`, from the page's quote): the signed floor is the higher of the two (point 20).
+  // - The exact call is simulated as if approved before any wallet prompt; the approval is asked
+  //   only once that passes (L3, point 20). The contract still checks every floor on chain.
+  // - A TooExpensive retry lowers the shares asked for, never the floor (M1).
+  async function mintFor(ethers, signer, budget, slipBps, onStep, shown) {
     const s = await load(ethers, signer.provider);
     needPrices(s);
     const x = new ethers.Contract(C.INDEX, INDEX_ABI, signer);
+    const owner = await signer.getAddress();
+    const imd = new ethers.Contract(C.IMD, ERC20_ABI, signer.provider);
+    if ((await imd.balanceOf(owner)) < budget) throw new Error("this wallet holds less IMD than the amount entered; nothing was sent");
+    let fn, args;
     if (s.supply === 0n) {
-      const minOut = firstMintMinOut(s, budget);
-      await ensureApproval(ethers, signer, budget, onStep);
-      await x.mintFirst.staticCall(budget, minOut);
-      onStep && onStep("Confirm the first mint in your wallet…");
-      return (await x.mintFirst(budget, minOut)).wait();
-    }
-    const q = quoteMint(s, budget, slipBps);
-    await ensureApproval(ethers, signer, budget, onStep);
-    let shares = q.shares;
-    while (shares >= q.minShares) {
-      try {
-        await x.mint.staticCall(shares, budget, q.minShares);
-        onStep && onStep("Confirm the mint in your wallet…");
-        return (await x.mint(shares, budget, q.minShares)).wait();
-      } catch (e) {
-        if (!tooDear(e)) throw e;
-        shares = (shares * 99n) / 100n;
+      const fresh = firstMintMinOut(s, budget);
+      const minOut = fresh.map((v, i) => (shown && shown.minOut && shown.minOut[i] > v ? shown.minOut[i] : v));
+      fn = "mintFirst"; args = [budget, minOut];
+      await simulateApproved(ethers, signer, x.interface.encodeFunctionData(fn, args), budget);
+    } else {
+      const q = quoteMint(s, budget, slipBps);
+      const floor = shown && shown.minShares > q.minShares ? shown.minShares : q.minShares;
+      let shares = q.shares > floor ? q.shares : floor;
+      for (;;) {
+        args = [shares, budget, floor];
+        try {
+          await simulateApproved(ethers, signer, x.interface.encodeFunctionData("mint", args), budget);
+          break;
+        } catch (e) {
+          if (!tooDear(e)) throw e;
+          const next = (shares * 99n) / 100n;
+          if (next < floor) throw new Error("at today's pool prices this budget cannot buy the minimum shown (the amount is too large for the pools, or prices moved); nothing was sent. Try a smaller amount or refresh");
+          shares = next;
+        }
       }
+      fn = "mint";
     }
-    throw new Error("at today's pool prices this budget cannot buy the minimum shown (the amount is too large for the pools, or prices moved); nothing was sent. Try a smaller amount or refresh");
+    await ensureApproval(ethers, signer, budget, onStep);
+    await x[fn].staticCall(...args);
+    onStep && onStep(fn === "mintFirst" ? "Confirm the first mint in your wallet…" : "Confirm the mint in your wallet…");
+    return (await x[fn](...args)).wait();
   }
 
   // The first mint spends (budget less the 0.50% fee) in equal parts on the listed coins. Each
@@ -322,10 +379,12 @@
     return ((sold + idlePart) * keep) / 10000n;
   }
 
-  async function redeemToImdFor(ethers, signer, shares, slipBps, onStep) {
+  // The signed minimum is the higher of the page's figure (`shown`) and the wallet node's (point 20).
+  async function redeemToImdFor(ethers, signer, shares, slipBps, onStep, shown) {
     const s = await load(ethers, signer.provider);
     const x = new ethers.Contract(C.INDEX, INDEX_ABI, signer);
-    const minOut = (quoteRedeemToImd(s, shares) * (10000n - BigInt(slipBps))) / 10000n;
+    let minOut = (quoteRedeemToImd(s, shares) * (10000n - BigInt(slipBps))) / 10000n;
+    if (shown && shown.minImdOut > minOut) minOut = shown.minImdOut;
     await x.redeemToImd.staticCall(shares, minOut);
     onStep && onStep("Confirm the redeem to IMD in your wallet…");
     return (await x.redeemToImd(shares, minOut)).wait();
@@ -340,7 +399,7 @@
 
   const api = { C, INDEX_ABI, ERC20_ABI, readProvider, poolPrice, load, activity, explain, mintFor,
     quoteRedeemToImd, redeemToImdFor, call, ensureApproval, firstMintMinOut, quoteMint, needPrices,
-    poolDepth, impactBps, mintImpactBps, redeemImpactBps };
+    poolDepth, impactBps, mintImpactBps, redeemImpactBps, simulateApproved, decodeRevert };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.IMDEX5 = api;
 })(typeof window !== "undefined" ? window : globalThis);

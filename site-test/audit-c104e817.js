@@ -88,6 +88,30 @@ class FlakyProvider extends ethers.JsonRpcProvider {
   }
   await reset();
 
+  // Point 20a: a mint that cannot go through asks for no approval (simulated as if approved first)
+  {
+    let err = null;
+    try { await X.mintFor(ethers, sb, ethers.parseEther("1900"), 300, () => {}); } catch (e) { err = e; }
+    const allowance = await imd.allowance(B, X.C.INDEX);
+    ok(err && allowance === 0n, "P20a: impossible mint -> no approval sent (allowance " + f(allowance) + ")");
+  }
+  await reset();
+
+  // Point 20b: the signed floor is never below what the page showed
+  {
+    const s = await X.load(ethers, p, B);
+    const q = X.quoteMint(s, ethers.parseEther("5"), 300);
+    let err = null;
+    try { await X.mintFor(ethers, sb, ethers.parseEther("5"), 300, () => {}, { minShares: q.shares * 2n }); } catch (e) { err = e; }
+    const allowance = await imd.allowance(B, X.C.INDEX);
+    ok(err && allowance === 0n, "P20b: page floor above what can be bought -> refused, no approval: " + (err && X.explain(err, "mint")));
+    const sh = (await X.load(ethers, p, D)).shares;
+    let err2 = null;
+    try { await X.redeemToImdFor(ethers, sd, sh, 300, () => {}, { minImdOut: ethers.parseEther("1000") }); } catch (e) { err2 = e; }
+    ok(err2 && (await X.load(ethers, p, D)).shares === sh, "P20b: redeem signs the page's higher minimum -> refused, shares kept");
+  }
+  await reset();
+
   // L7: TooLittleOut on a first mint has the first-mint wording
   {
     const e = { revert: { name: "TooLittleOut", args: [1n] } };

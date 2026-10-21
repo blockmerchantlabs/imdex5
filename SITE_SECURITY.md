@@ -23,6 +23,8 @@ A static page with no server, no build step and no third-party requests besides 
 
 ## What each button sends
 
+**Before any wallet prompt**, the exact mint call is simulated as if the IMD approval were already in place: an `eth_call` with a state override of IMD's allowance slot (mapping slot 6), on the wallet's node, or a public node only if the wallet's node lacks overrides. The approval is requested only after that passes. If neither node can simulate, nothing is sent. **The signed minimum** is the higher of the figure the page showed and the figure recomputed from the wallet's node, so it is never below what the user saw. If the price moves between the approval and the mint, the exact approval stays unused, and the mint's own floors still hold.
+
 Every limit is computed once, from one read of the wallet's own node, before any wallet prompt. A coin whose pool price cannot be read stops the action before the wallet opens. Every write runs `staticCall` first, so a call that would revert never reaches the wallet. (Site audit c104e817: all nine findings fixed; regression tests in `site-test/audit-c104e817.js`.)
 - **Approve:** exactly the amount being minted, to the index address only. Never an unlimited approval.
 - **First mint:** `mintFirst(budget, minOut)`. Each `minOut[i]` is 93% of (budget × 99.5% ÷ n) ÷ the coin's spot price. A coin with no price stops the mint before the wallet opens.
