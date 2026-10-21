@@ -104,6 +104,51 @@
     return tokenIsZero ? (sqrt * sqrt * E18) / Q192 : (Q192 * E18) / (sqrt * sqrt);
   }
 
+  // The IMD side of a pool's active liquidity (its virtual reserve at the current price), used only
+  // to warn about price impact; a failed read just means no warning.
+  async function poolDepth(ethers, provider, token, hook) {
+    const tokenIsZero = BigInt(token) < BigInt(C.IMD);
+    const [c0, c1] = tokenIsZero ? [token, C.IMD] : [C.IMD, token];
+    const coder = ethers.AbiCoder.defaultAbiCoder();
+    const poolId = ethers.keccak256(
+      coder.encode(["address", "address", "uint24", "int24", "address"], [c0, c1, C.POOL_FEE, C.TICK_SPACING, hook])
+    );
+    const base = BigInt(ethers.keccak256(coder.encode(["bytes32", "uint256"], [poolId, C.POOLS_SLOT])));
+    const pm = new ethers.Contract(C.POOL_MANAGER, PM_ABI, provider);
+    const [w0, w3] = await Promise.all([pm.extsload(ethers.toBeHex(base, 32)), pm.extsload(ethers.toBeHex(base + 3n, 32))]);
+    const sqrt = BigInt(w0) & ((1n << 160n) - 1n);
+    const liq = BigInt(w3) & ((1n << 128n) - 1n);
+    if (sqrt === 0n) return null;
+    return tokenIsZero ? (liq * sqrt) >> 96n : (liq << 96n) / sqrt;
+  }
+
+  // Execution price impact, in basis points, of putting `amount` IMD through a pool of `depth`.
+  function impactBps(amount, depth) {
+    if (!depth || amount === 0n) return 0n;
+    return (amount * 10000n) / (depth + amount);
+  }
+  // The worst single-pool impact of a mint of `budget` IMD (first mint: equal parts; later: by value).
+  function mintImpactBps(s, budget) {
+    const listed = s.rows.filter((r) => r.listed);
+    let worst = 0n;
+    for (const r of s.supply === 0n ? listed : s.rows) {
+      const part = s.supply === 0n ? (budget * 9950n) / 10000n / BigInt(listed.length)
+        : s.coinValue > 0n ? (budget * r.value) / s.coinValue : 0n;
+      const b = impactBps(part, r.imdDepth);
+      if (b > worst) worst = b;
+    }
+    return worst;
+  }
+  // The worst single-pool impact of selling `shares`' part of each coin for IMD.
+  function redeemImpactBps(s, shares) {
+    let worst = 0n;
+    for (const r of s.rows) {
+      const b = impactBps(s.supply > 0n ? (r.value * shares) / s.supply : 0n, r.imdDepth);
+      if (b > worst) worst = b;
+    }
+    return worst;
+  }
+
   async function load(ethers, provider, account) {
     const x = new ethers.Contract(C.INDEX, INDEX_ABI, provider);
     const imd = new ethers.Contract(C.IMD, ERC20_ABI, provider);
@@ -114,16 +159,17 @@
     const rows = await Promise.all(
       coins.map(async (c, i) => {
         const t = new ethers.Contract(c.token, ERC20_ABI, provider);
-        const [symbol, held, price, owed] = await Promise.all([
+        const [symbol, held, price, owed, imdDepth] = await Promise.all([
           t.symbol().catch(() => "?"),
           x.held(c.token),
           poolPrice(ethers, provider, c.token, c.hook).catch(() => null),
           account ? x.owed(account, c.token) : 0n,
+          poolDepth(ethers, provider, c.token, c.hook).catch(() => null),
         ]);
         // a price that could not be read is null, never 0: quotes refuse it (audit c104e817, M2)
         const priceOk = price !== null && price > 0n;
         return {
-          token: c.token, hook: c.hook, launch: Number(c.launch), symbol, held, owed, priceOk,
+          token: c.token, hook: c.hook, launch: Number(c.launch), symbol, held, owed, priceOk, imdDepth,
           price: priceOk ? price : 0n, value: priceOk ? (held * price) / E18 : 0n, listed: BigInt(i) < listCount,
         };
       })
@@ -293,7 +339,8 @@
   }
 
   const api = { C, INDEX_ABI, ERC20_ABI, readProvider, poolPrice, load, activity, explain, mintFor,
-    quoteRedeemToImd, redeemToImdFor, call, ensureApproval, firstMintMinOut, quoteMint, needPrices };
+    quoteRedeemToImd, redeemToImdFor, call, ensureApproval, firstMintMinOut, quoteMint, needPrices,
+    poolDepth, impactBps, mintImpactBps, redeemImpactBps };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.IMDEX5 = api;
 })(typeof window !== "undefined" ? window : globalThis);

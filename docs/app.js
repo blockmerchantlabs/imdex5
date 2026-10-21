@@ -4,7 +4,20 @@
   const X = window.IMDEX5;
   const $ = (id) => document.getElementById(id);
   const E18 = 10n ** 18n;
-  const SLIP_BPS = 300; // 3%: the least you accept below the quote
+  // Max slippage: how far below the quote you accept. 3% by default: these coins trade in thin
+  // pools with a 1.25% fee, and one takes a 2% tax. Kept per browser.
+  const SLIPS = [100, 300, 500];
+  let SLIP_BPS = 300;
+  try { const v = Number(localStorage.getItem("imdex5-slip")); if (SLIPS.includes(v)) SLIP_BPS = v; } catch (_) {}
+  function slipWarning() {
+    return SLIP_BPS < 300 ? "Under 3% often fails in these pools: the fee and SwarmCity's tax alone are about 3%."
+      : SLIP_BPS > 300 ? "Above 3% lets a bot take more from a large trade. Prefer a smaller trade." : "";
+  }
+  function impactLine(bps) {
+    if (bps === 0n) return "";
+    const t = " Price impact: about " + (Number(bps) / 100).toFixed(2) + "% in the thinnest pool.";
+    return bps >= 300n ? '<span class="warn">' + t + " That is large for these pools; consider a smaller amount.</span>" : t;
+  }
 
   let reader = null;
   let browser = null; // ethers BrowserProvider
@@ -36,6 +49,18 @@
     "0xd782bdea4ef02a0bd391eb9089470c8080f0a68e": "coins/737.png",
     "0x1ae93a4d9cc0b41c594d00387b6f832a88f729b7": "coins/1175.png",
   };
+  // Each coin's X account where one is confirmed (Radar's registry, checked 2026-10-21); otherwise
+  // its page on the IMD explorer.
+  const SOCIAL = {
+    "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7": "frenpetonbase",
+    "0xd782bdea4ef02a0bd391eb9089470c8080f0a68e": "ZTO_ETH",
+    "0xfa0efea559bde229031c2b0a219472316647759c": "marginalia_md",
+  };
+  function social(token) {
+    const h = SOCIAL[token.toLowerCase()];
+    if (h) return ' <a class="soc" href="https://x.com/' + h + '" target="_blank" rel="noopener" title="@' + h + ' on X"><img src="x.svg" alt="X" width="13" height="13"></a>';
+    return ' <a class="soc" href="https://explorer.imd.fun/token/' + token + '" target="_blank" rel="noopener" title="On the IMD explorer">IMD↗</a>';
+  }
   function logo(r) {
     const src = LOGOS[r.token.toLowerCase()];
     if (src) return '<img class="coin" src="' + src + '" alt="" width="24" height="24">';
@@ -90,15 +115,15 @@
     let h = "";
     for (const r of s.rows) {
       const name = esc(r.symbol) + ' <span class="tag">#' + r.launch + (r.listed ? "" : " · leaving") + "</span>";
-      h += "<tr><td>" + logo(r) + "<a href=\"https://etherscan.io/token/" + r.token + "\" target=\"_blank\" rel=\"noopener\">" + name + "</a></td>" +
+      h += "<tr><td>" + logo(r) + "<a href=\"https://etherscan.io/token/" + r.token + "\" target=\"_blank\" rel=\"noopener\">" + name + "</a>" + social(r.token) + "</td>" +
         '<td class="num">' + seg(r.weightBps) + pct(r.weightBps) + "</td>" +
         '<td class="num">' + fmt(r.perShare, 2) + "</td>" +
         '<td class="num">' + fmt(r.price, 8) + "</td>" +
         '<td class="num">' + fmt(r.value, 4) + "</td></tr>";
     }
-    h += '<tr><td><span class="coin mono m0" aria-hidden="true">IMD</span>Idle IMD</td><td class="num">' + seg(s.idleWeightBps) + pct(s.idleWeightBps) +
+    h += '<tr><td><img class="coin" src="coins/imd.png" alt="" width="24" height="24"><a href="https://etherscan.io/token/' + X.C.IMD + '" target="_blank" rel="noopener">Idle IMD</a>' + social(X.C.IMD) + '</td><td class="num">' + seg(s.idleWeightBps) + pct(s.idleWeightBps) +
       '</td><td class="num">' + (s.supply > 0n ? fmt((s.idle * E18) / s.supply, 4) : "0") +
-      '</td><td class="num">1</td><td class="num">' + fmt(s.idle, 4) + "</td></tr>";
+      '</td><td class="num">1 <span class="tag">(is IMD)</span></td><td class="num">' + fmt(s.idle, 4) + "</td></tr>";
     $("rows").innerHTML = h;
 
     // keepers
@@ -140,11 +165,11 @@
     if (amt === 0n) { $("buyQuote").textContent = s.supply === 0n ? "No one has minted yet: the first mint sets one IMDEX5 per IMD invested." : "Enter an amount."; return; }
     if (s.supply === 0n) {
       const n = BigInt(s.rows.filter((r) => r.listed).length);
-      $("buyQuote").textContent = "First mint: about " + fmt((amt * 9950n) / 10000n, 4) + " IMDEX5, buying " + n + " coins with " + fmt((amt * 9950n) / 10000n / n, 4) + " IMD each. Each coin must deliver at least 93% of its quote at the pool price, or nothing happens.";
+      $("buyQuote").innerHTML = "First mint: about " + fmt((amt * 9950n) / 10000n, 4) + " IMDEX5, buying " + n + " coins with " + fmt((amt * 9950n) / 10000n / n, 4) + " IMD each. Each coin must deliver at least 93% of its quote at the pool price, or nothing happens." + impactLine(X.mintImpactBps(s, amt));
     } else {
       if (!s.pricesOk) { $("buyQuote").textContent = "A coin's pool price could not be read just now, so minting waits for the next refresh."; return; }
       const q = X.quoteMint(s, amt, SLIP_BPS);
-      $("buyQuote").textContent = "About " + fmt(q.shares, 4) + " IMDEX5 (at least " + fmt(q.minShares, 4) + ", or nothing happens). Unused IMD is refunded.";
+      $("buyQuote").innerHTML = "About " + fmt(q.shares, 4) + " IMDEX5 (at least " + fmt(q.minShares, 4) + ", or nothing happens). Unused IMD is refunded." + impactLine(X.mintImpactBps(s, amt));
     }
     if (!account) { go.textContent = "Connect a wallet to mint"; return; }
     if (amt > s.imdBalance) { go.textContent = "Not enough IMD"; return; }
@@ -166,13 +191,13 @@
     let forImd;
     try {
       const out = X.quoteRedeemToImd(s, a);
-      forImd = "about " + fmt(out, 4) + " IMD (at least " + fmt((out * BigInt(10000 - SLIP_BPS)) / 10000n, 4) + ", or nothing happens)";
+      forImd = "about " + fmt(out, 4) + " IMD (at least " + fmt((out * BigInt(10000 - SLIP_BPS)) / 10000n, 4) + ", or nothing happens)." + impactLine(X.redeemImpactBps(s, a)) + " ";
     } catch (e) {
       forImd = "no quote: " + esc(e.message);
     }
     const kind = s.rows.filter((r) => r.held > 0n).map((r) => fmt((r.held * a * keep) / (s.supply * 10000n), 2) + " " + esc(r.symbol));
     if (s.idle > 0n) kind.push(fmt((s.idle * a * keep) / (s.supply * 10000n), 4) + " IMD");
-    $("sellQuote").innerHTML = "For IMD: " + forImd + ".<br>For the coins: " + kind.join(", ") + ".";
+    $("sellQuote").innerHTML = "For IMD: " + forImd + "<br>For the coins (no trade, no impact): " + kind.join(", ") + ".";
     if (!account || amt > s.shares) return;
     $("sellImd").disabled = $("sellKind").disabled = false;
     lockIfBusy();
@@ -267,6 +292,15 @@
         setStatus("");
       };
     });
+    $("slip").value = String(SLIP_BPS);
+    $("slipWarn").textContent = slipWarning();
+    $("slip").onchange = () => {
+      SLIP_BPS = Number($("slip").value);
+      try { localStorage.setItem("imdex5-slip", String(SLIP_BPS)); } catch (_) {}
+      $("slipWarn").textContent = slipWarning();
+      quoteBuy();
+      quoteSell();
+    };
     $("buyAmt").oninput = quoteBuy;
     $("sellAmt").oninput = quoteSell;
     $("buyMax").onclick = () => { if (state && account) { $("buyAmt").value = ethers.formatEther(state.imdBalance); quoteBuy(); } };

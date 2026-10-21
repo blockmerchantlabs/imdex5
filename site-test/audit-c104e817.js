@@ -13,11 +13,16 @@ const f = (v) => ethers.formatEther(v);
 let failed = 0;
 const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) failed++; };
 
-// A provider whose eth_call to the PoolManager fails for the first `n` calls (an RPC hiccup).
+// A provider whose reads of INFER's pool state always fail (an RPC that rate-limits one call).
+const coder = ethers.AbiCoder.defaultAbiCoder();
+const INFER = "0x53d0eA0A685220718Dc6a0a6e4617194C6F37921";
+const INFER_SLOT = ethers.keccak256(coder.encode(["bytes32", "uint256"], [
+  ethers.keccak256(coder.encode(["address", "address", "uint24", "int24", "address"],
+    [INFER, X.C.IMD, 12500, 60, "0x784FF9a3ac5d88A30bfff6F7f2a270161FBE6000"])), 6])).slice(2).toLowerCase();
 class FlakyProvider extends ethers.JsonRpcProvider {
-  constructor(url, fails) { super(url, 1, { staticNetwork: true }); this.fails = fails; }
+  constructor(url) { super(url, 1, { staticNetwork: true }); }
   async call(tx) {
-    if (this.fails > 0 && tx.to && BigInt(tx.to) === BigInt(X.C.POOL_MANAGER)) { this.fails--; throw new Error("429 too many requests"); }
+    if (tx.to && BigInt(tx.to) === BigInt(X.C.POOL_MANAGER) && String(tx.data).toLowerCase().includes(INFER_SLOT)) throw new Error("429 too many requests");
     return super.call(tx);
   }
 }
@@ -33,7 +38,7 @@ class FlakyProvider extends ethers.JsonRpcProvider {
 
   // L3: a missing price stops the first mint before any wallet prompt (no approval is sent)
   {
-    const flaky = new FlakyProvider(RPC, 1);
+    const flaky = new FlakyProvider(RPC);
     const steps = [];
     let err = null;
     try { await X.mintFor(ethers, new ethers.JsonRpcSigner(flaky, D), ethers.parseEther("10"), 300, (m) => steps.push(m)); } catch (e) { err = e; }
@@ -65,7 +70,7 @@ class FlakyProvider extends ethers.JsonRpcProvider {
   // M2: one failed price read on the wallet's node -> redeem to IMD refuses, nothing is sent
   {
     const sh = (await X.load(ethers, p, D)).shares;
-    const flaky = new FlakyProvider(RPC, 1);
+    const flaky = new FlakyProvider(RPC);
     let err = null;
     const before = (await X.load(ethers, p, D)).shares;
     try { await X.redeemToImdFor(ethers, new ethers.JsonRpcSigner(flaky, D), sh / 2n, 300, () => {}); } catch (e) { err = e; }

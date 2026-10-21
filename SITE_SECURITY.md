@@ -31,6 +31,10 @@ Every limit is computed once, from one read of the wallet's own node, before any
 - **Redeem for the coins / claim / ask / rebalance / closeRequest:** no amounts beyond the user's own input. The upkeep buttons are enabled only when the contract would accept the call.
 - **One call at a time:** while one is in flight, every action button is disabled.
 
+- **Max slippage** (1%, 3% default, 5%; kept per browser) sets `minShares` and `minImdOut`. Under 3% warns that it may fail; above 3% warns about larger trades. The first mint's per-coin floor stays at 93%.
+- **Price impact:** the page estimates each pool's impact from its active liquidity (`poolDepth`, the IMD side of the virtual reserve) and warns at 3% or more. It is only a warning; the floors above still protect the trade. A failed depth read shows no warning and blocks nothing.
+- **Links:** each coin links to Etherscan and to its X account where one is confirmed (a fixed list in `app.js`), otherwise to its IMD explorer page. No link is built from on-chain text.
+
 ## Page hardening
 
 - **Content-Security-Policy** (meta): `default-src 'none'`; scripts, styles, fonts and images from the site only; `connect-src` limited to the three read nodes; `base-uri` and `form-action` 'none'. There are no inline scripts and no inline styles.

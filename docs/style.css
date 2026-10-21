@@ -86,3 +86,11 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
 .coin.mono { font-size: 9px; font-weight: 600; line-height: 22px; text-align: center; color: var(--paper); }
 .m0 { background: var(--accent); } .m1 { background: #4F6D8A; } .m2 { background: #6B5B8C; }
 .m3 { background: #3E7A62; } .m4 { background: #8A5A44; } .m5 { background: var(--dim); }
+.slip { align-items: center; }
+.slip label { flex: 1; }
+select { font: inherit; height: 40px; padding: 0 10px; background: var(--paper); color: var(--ink); border: 1.5px solid var(--ink); border-radius: 0; flex: 0 0 auto; }
+.warn { color: var(--alarm); }
+.soc { margin-left: 6px; font-size: 10px; text-decoration: none; color: var(--dim); }
+.soc img { vertical-align: -2px; opacity: .75; }
+.soc:hover img { opacity: 1; }
+[data-theme="slate"] .soc img, [data-theme="black"] .soc img { filter: invert(1); }

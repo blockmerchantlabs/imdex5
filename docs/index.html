@@ -56,12 +56,16 @@
       <button role="tab" aria-selected="false" data-pane="claim">Claim</button>
     </div>
     <div class="kv" id="mine"><span class="k">Wallet</span><span>not connected</span></div>
+    <div class="row slip"><label class="label" for="slip">Max slippage</label>
+      <select id="slip"><option value="100">1%</option><option value="300" selected>3%</option><option value="500">5%</option></select></div>
+    <p class="tag" id="slipWarn"></p>
 
     <div class="pane on" id="buy">
       <p class="label">Spend up to (IMD)</p>
       <div class="row"><input id="buyAmt" inputmode="decimal" placeholder="10"><button id="buyMax" class="fit">Max</button></div>
       <div class="quote" id="buyQuote">Enter an amount.</div>
       <button class="main full" id="buyGo" disabled>Mint</button>
+      <p class="tag">Tip: send through an MEV-protected RPC (for example Flashbots Protect) so bots cannot sandwich the trade.</p>
       <p class="tag">Two wallet steps: approve exactly this much IMD, then mint. The contract buys each coin in its pool; any IMD it did not need comes back in the same transaction. A 0.50% fee goes to the upkeep reserve.</p>
     </div>
 
