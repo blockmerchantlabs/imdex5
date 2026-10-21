@@ -192,8 +192,8 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
     <h2>Methodology</h2>
     <ul class="plain">
       <li><b>Universe.</b> Tokens launched through IMD on Ethereum with a Uniswap v4 pool paired with IMD.</li>
-      <li><b>Selection.</b> Once a week anyone can have the contract ask the IMD oracle, a panel of five, for the five largest such tokens by IMD in their pools. The question is written into the contract; at least four of the five must agree, and the answer is signed.</li>
-      <li><b>Weighting.</b> Equal IMD parts at each mint and rebalance, and no coin above 25% of the index after a rebalance.</li>
+      <li><b>Selection.</b> Once a week anyone can have the contract ask the IMD oracle, a panel of five. The question is written into the contract: among tokens in IMD's launch registries whose pool against IMD holds at least 100 IMD, the five largest by spot price in IMD times total supply (USDC, USDT and imdUSD excluded). At least four of the five must agree, and the answer is signed.</li>
+      <li><b>Weighting.</b> Equal IMD parts at the first mint and at each rebalance; later mints buy in the current proportions. With four or more coins, a rebalance trims any coin above 25% of the index.</li>
       <li><b>Rebalance.</b> Anyone runs it once a new list is in. Coins that left are sold; new ones are bought. Each trade stops at a 1% move in the pool's square-root price (about 2% in price), so a large holding leaves over several weeks.</li>
       <li><b>Minting and redeeming.</b> Minting buys every coin in proportion. Redeeming pays the coins in kind, or sells them for IMD.</li>
     </ul>
@@ -201,7 +201,7 @@ footer { border-top: 1.5px solid var(--ink); padding: 20px 0 40px; color: var(--
     <ul class="plain">
       <li>0.50% on mints and on redeems; nothing while you hold.</li>
       <li>The pools charge their own 1.25% on every buy and sale. Redeeming for the coins avoids it.</li>
-      <li>SwarmCity takes 2% on transfers, so a mint receives slightly fewer shares.</li>
+      <li>A coin with a transfer tax costs a little more while it is in the index: SwarmCity, in the current list, takes 2%, so a mint receives about 2% fewer shares of it.</li>
       <li>A round trip (mint, then redeem for IMD) cost 2–5% in our mainnet-fork tests.</li>
     </ul>
   </div>

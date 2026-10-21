@@ -198,7 +198,7 @@
     const x = new ethers.Contract(C.INDEX, INDEX_ABI, signer);
     await ensureApproval(ethers, signer, budget, onStep);
     if (s.supply === 0n) {
-      const minOut = s.rows.filter((r) => r.listed).map(() => 0n);
+      const minOut = firstMintMinOut(s, budget);
       await x.mintFirst.staticCall(budget, minOut);
       onStep && onStep("Confirm the first mint in your wallet…");
       return (await x.mintFirst(budget, minOut)).wait();
@@ -217,6 +217,20 @@
       }
     }
     throw new Error("could not fit a mint inside this budget");
+  }
+
+  // The first mint spends (budget less the 0.50% fee) in equal parts on the listed coins. Each
+  // coin must deliver at least FIRST_MIN_BPS of what its part buys at the pool's spot price, so
+  // a pool that pays dust fails the whole mint instead of taking its fifth (pool fee 1.25%, a
+  // transfer tax up to 2% and price impact all fit inside the 10% margin).
+  const FIRST_MIN_BPS = 9000n;
+  function firstMintMinOut(s, budget) {
+    const listed = s.rows.filter((r) => r.listed);
+    const part = (budget * 9950n) / 10000n / BigInt(listed.length);
+    return listed.map((r) => {
+      if (r.price === 0n) throw new Error(r.symbol + " has no pool price; the first mint would fail");
+      return (((part * E18) / r.price) * FIRST_MIN_BPS) / 10000n;
+    });
   }
 
   // Expected IMD from redeemToImd, before the caller's slippage margin.
@@ -246,7 +260,7 @@
   }
 
   const api = { C, INDEX_ABI, ERC20_ABI, readProvider, poolPrice, load, activity, explain, mintFor,
-    quoteRedeemToImd, redeemToImdFor, call, ensureApproval };
+    quoteRedeemToImd, redeemToImdFor, call, ensureApproval, firstMintMinOut };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.IMDEX5 = api;
 })(typeof window !== "undefined" ? window : globalThis);

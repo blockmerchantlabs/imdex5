@@ -10,6 +10,12 @@
   let browser = null; // ethers BrowserProvider
   let account = null;
   let state = null;
+  let busy = false; // a wallet call is in flight: every action button stays disabled
+
+  function lockIfBusy() {
+    if (!busy) return;
+    document.querySelectorAll("#act button:not([role=tab]), #keepers button").forEach((b) => (b.disabled = true));
+  }
 
   function fmt(v, dp) {
     const n = Number(ethers.formatEther(v));
@@ -17,6 +23,10 @@
     const d = dp === undefined ? (n >= 1000 ? 0 : n >= 1 ? 4 : 6) : dp;
     if (n < 10 ** -d) return n.toExponential(2);
     return n.toLocaleString("en-US", { maximumFractionDigits: d });
+  }
+  // Coin symbols come from whatever tokens the oracle lists, so they are untrusted text.
+  function esc(t) {
+    return String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
   function pct(bps) { return (Number(bps) / 100).toFixed(1) + "%"; }
   function short(a) { return a.slice(0, 6) + "…" + a.slice(-4); }
@@ -65,7 +75,7 @@
 
     let h = "";
     for (const r of s.rows) {
-      const name = r.symbol + ' <span class="tag">#' + r.launch + (r.listed ? "" : " · leaving") + "</span>";
+      const name = esc(r.symbol) + ' <span class="tag">#' + r.launch + (r.listed ? "" : " · leaving") + "</span>";
       h += "<tr><td><a href=\"https://etherscan.io/token/" + r.token + "\" target=\"_blank\" rel=\"noopener\">" + name + "</a></td>" +
         '<td class="num">' + seg(r.weightBps) + pct(r.weightBps) + "</td>" +
         '<td class="num">' + fmt(r.perShare, 2) + "</td>" +
@@ -99,11 +109,12 @@
       const owed = s.rows.filter((r) => r.owed > 0n);
       if (s.imdOwed > 0n) owed.push({ symbol: "IMD", token: X.C.IMD, owed: s.imdOwed });
       $("owedList").innerHTML = owed.length
-        ? owed.map((r) => '<div class="row"><span>' + fmt(r.owed, 4) + " " + r.symbol + '</span><button data-claim="' + r.token + '">Claim</button></div>').join("")
+        ? owed.map((r) => '<div class="row"><span>' + fmt(r.owed, 4) + " " + esc(r.symbol) + '</span><button data-claim="' + esc(r.token) + '"' + (busy ? " disabled" : "") + ">Claim</button></div>").join("")
         : "Nothing is owed to this wallet.";
     }
     quoteBuy();
     quoteSell();
+    lockIfBusy();
   }
 
   function quoteBuy() {
@@ -124,6 +135,7 @@
     if (amt > s.imdBalance) { go.textContent = "Not enough IMD"; return; }
     go.textContent = s.supply === 0n ? "Make the first mint" : "Mint";
     go.disabled = false;
+    lockIfBusy();
   }
 
   function quoteSell() {
@@ -136,11 +148,12 @@
     if (s.supply === 0n) { $("sellQuote").textContent = "Nothing is minted yet."; return; }
     const out = X.quoteRedeemToImd(s, amt > s.supply ? s.supply : amt);
     const keep = amt === s.supply ? 10000n : 9950n;
-    const kind = s.rows.filter((r) => r.held > 0n).map((r) => fmt((r.held * amt * keep) / (s.supply * 10000n), 2) + " " + r.symbol);
+    const kind = s.rows.filter((r) => r.held > 0n).map((r) => fmt((r.held * amt * keep) / (s.supply * 10000n), 2) + " " + esc(r.symbol));
     if (s.idle > 0n) kind.push(fmt((s.idle * amt * keep) / (s.supply * 10000n), 4) + " IMD");
     $("sellQuote").innerHTML = "For IMD: about " + fmt(out, 4) + " IMD (at least " + fmt((out * BigInt(10000 - SLIP_BPS)) / 10000n, 4) + ").<br>For the coins: " + kind.join(", ") + ".";
     if (!account || amt > s.shares) return;
     $("sellImd").disabled = $("sellKind").disabled = false;
+    lockIfBusy();
   }
 
   async function refresh() {
@@ -179,14 +192,18 @@
   }
 
   async function run(label, fn) {
+    if (busy) return;
+    busy = true;
+    lockIfBusy();
     setStatus(label + "…");
-    document.querySelectorAll("#act button, #keepers button").forEach((b) => (b.dataset.busy = "1"));
     try {
       const s = await signer();
       const rc = await fn(s, (m) => setStatus(m));
       setStatus(label + " done. Transaction " + short(rc.hash) + ".", "ok");
     } catch (e) {
       setStatus(label + " did not go through: " + X.explain(e), "err");
+    } finally {
+      busy = false;
     }
     await refresh();
   }
