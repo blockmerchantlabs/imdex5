@@ -117,12 +117,14 @@
         const [symbol, held, price, owed] = await Promise.all([
           t.symbol().catch(() => "?"),
           x.held(c.token),
-          poolPrice(ethers, provider, c.token, c.hook).catch(() => 0n),
+          poolPrice(ethers, provider, c.token, c.hook).catch(() => null),
           account ? x.owed(account, c.token) : 0n,
         ]);
+        // a price that could not be read is null, never 0: quotes refuse it (audit c104e817, M2)
+        const priceOk = price !== null && price > 0n;
         return {
-          token: c.token, hook: c.hook, launch: Number(c.launch), symbol, held, price, owed,
-          value: (held * price) / E18, listed: BigInt(i) < listCount,
+          token: c.token, hook: c.hook, launch: Number(c.launch), symbol, held, owed, priceOk,
+          price: priceOk ? price : 0n, value: priceOk ? (held * price) / E18 : 0n, listed: BigInt(i) < listCount,
         };
       })
     );
@@ -134,6 +136,7 @@
     }
     const s = {
       rows, next, idle, fee, supply, total, coinValue,
+      pricesOk: rows.every((r) => r.priceOk || (!r.listed && r.held === 0n)),
       nav: supply > 0n ? (total * E18) / supply : 0n,
       idleWeightBps: total > 0n ? (idle * 10000n) / total : 0n,
       openSince: BigInt(openSince), lastAsk: BigInt(lastAsk), answerPending: answerHash !== ethers.ZeroHash,
@@ -172,12 +175,39 @@
     return out.slice(0, limit || 20);
   }
 
-  function explain(e) {
+  // `op` is "first", "mint" or another label, so one error can read right for each action.
+  function explain(e, op) {
     const name = e && e.revert && e.revert.name;
+    if (name === "TooLittleOut" && op === "first")
+      return "a coin's pool would deliver less than the minimum (its price moved, or the amount is too large for that pool); try a smaller amount";
+    if (name === "ERC20InsufficientBalance" && isIndex(e.revert.args && e.revert.args[0]))
+      return "the pools cannot fill this size at the quoted price; try a smaller amount";
     if (name && ERRORS[name]) return ERRORS[name];
     if (name) return name;
     if (e && (e.code === "ACTION_REJECTED" || e.code === 4001)) return "you cancelled it in the wallet";
     return (e && (e.shortMessage || e.message)) || String(e);
+  }
+
+  function isIndex(a) {
+    try { return a && BigInt(a) === BigInt(C.INDEX); } catch (_) { return false; }
+  }
+  function tooDear(e) {
+    const r = e && e.revert;
+    return !!r && (r.name === "TooExpensive" || (r.name === "ERC20InsufficientBalance" && isIndex(r.args && r.args[0])));
+  }
+
+  // The later-mint quote, shared by the page and the transaction so both show and sign the same
+  // numbers: shares the budget buys at NAV (less the 0.50% fee, the pools' cost and a margin), and
+  // the floor the page shows as "at least".
+  function quoteMint(s, budget, slipBps) {
+    if (s.supply === 0n || s.nav === 0n) return null;
+    const shares = (budget * E18 * 10000n) / (s.nav * (10000n + 50n + TRADE_COST_BPS + 100n));
+    return { shares, minShares: (shares * (10000n - BigInt(slipBps))) / 10000n };
+  }
+
+  function needPrices(s) {
+    const bad = s.rows.find((r) => !r.priceOk && (r.listed || r.held > 0n));
+    if (bad) throw new Error(bad.symbol + "'s pool price could not be read; nothing was sent. Try again in a moment");
   }
 
   async function ensureApproval(ethers, signer, amount, onStep) {
@@ -190,33 +220,35 @@
     await tx.wait();
   }
 
-  // Mint for a budget of `budget` IMD. Returns the receipt. `slipBps` bounds how many fewer
-  // shares than quoted you accept.
+  // Mint for a budget of `budget` IMD. Returns the receipt. Every limit is fixed from one read of
+  // the wallet's own node before any wallet prompt (audit c104e817, L3), and the signed floor is
+  // never below the "at least" the page showed (M1): a retry after TooExpensive lowers the shares
+  // asked for, never the floor, and stops once the shares would fall under it.
   async function mintFor(ethers, signer, budget, slipBps, onStep) {
-    const provider = signer.provider;
-    const s = await load(ethers, provider);
+    const s = await load(ethers, signer.provider);
+    needPrices(s);
     const x = new ethers.Contract(C.INDEX, INDEX_ABI, signer);
-    await ensureApproval(ethers, signer, budget, onStep);
     if (s.supply === 0n) {
       const minOut = firstMintMinOut(s, budget);
+      await ensureApproval(ethers, signer, budget, onStep);
       await x.mintFirst.staticCall(budget, minOut);
       onStep && onStep("Confirm the first mint in your wallet…");
       return (await x.mintFirst(budget, minOut)).wait();
     }
-    // shares the budget buys at NAV, less the 0.50% fee and the pools' cost, with a margin
-    let shares = (budget * E18 * 10000n) / (s.nav * (10000n + 50n + TRADE_COST_BPS + 100n));
-    for (let i = 0; i < 6; i++) {
-      const minShares = (shares * (10000n - BigInt(slipBps))) / 10000n;
+    const q = quoteMint(s, budget, slipBps);
+    await ensureApproval(ethers, signer, budget, onStep);
+    let shares = q.shares;
+    while (shares >= q.minShares) {
       try {
-        await x.mint.staticCall(shares, budget, minShares);
+        await x.mint.staticCall(shares, budget, q.minShares);
         onStep && onStep("Confirm the mint in your wallet…");
-        return (await x.mint(shares, budget, minShares)).wait();
+        return (await x.mint(shares, budget, q.minShares)).wait();
       } catch (e) {
-        if (!(e.revert && e.revert.name === "TooExpensive")) throw e;
-        shares = (shares * 97n) / 100n;
+        if (!tooDear(e)) throw e;
+        shares = (shares * 99n) / 100n;
       }
     }
-    throw new Error("could not fit a mint inside this budget");
+    throw new Error("at today's pool prices this budget cannot buy the minimum shown (the amount is too large for the pools, or prices moved); nothing was sent. Try a smaller amount or refresh");
   }
 
   // The first mint spends (budget less the 0.50% fee) in equal parts on the listed coins. Each
@@ -236,6 +268,7 @@
   // Expected IMD from redeemToImd, before the caller's slippage margin.
   function quoteRedeemToImd(s, shares) {
     if (s.supply === 0n || shares === 0n) return 0n;
+    needPrices(s);
     const keep = shares === s.supply ? 10000n : 9950n;
     const coinPart = (s.coinValue * shares) / s.supply;
     const sold = (coinPart * (10000n - TRADE_COST_BPS)) / 10000n;
@@ -260,7 +293,7 @@
   }
 
   const api = { C, INDEX_ABI, ERC20_ABI, readProvider, poolPrice, load, activity, explain, mintFor,
-    quoteRedeemToImd, redeemToImdFor, call, ensureApproval, firstMintMinOut };
+    quoteRedeemToImd, redeemToImdFor, call, ensureApproval, firstMintMinOut, quoteMint, needPrices };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.IMDEX5 = api;
 })(typeof window !== "undefined" ? window : globalThis);

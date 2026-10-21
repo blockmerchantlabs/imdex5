@@ -23,10 +23,10 @@ A static page with no server, no build step and no third-party requests besides 
 
 ## What each button sends
 
-Every write runs `staticCall` first, so a call that would revert never reaches the wallet.
+Every limit is computed once, from one read of the wallet's own node, before any wallet prompt. A coin whose pool price cannot be read stops the action before the wallet opens. Every write runs `staticCall` first, so a call that would revert never reaches the wallet. (Site audit c104e817: all nine findings fixed; regression tests in `site-test/audit-c104e817.js`.)
 - **Approve:** exactly the amount being minted, to the index address only. Never an unlimited approval.
 - **First mint:** `mintFirst(budget, minOut)`. Each `minOut[i]` is 93% of (budget × 99.5% ÷ n) ÷ the coin's spot price. A coin with no price stops the mint before the wallet opens.
-- **Mint:** `mint(shares, maxImdIn = budget, minShares = 97% of shares)`. The quote is budget ÷ (value per share × 1.04). On `TooExpensive` the site retries with 3% fewer shares, up to six times. Unused IMD is refunded by the contract.
+- **Mint:** `mint(shares, maxImdIn = budget, minShares = 97% of shares)`. The quote is budget ÷ (value per share × 1.04). The page and the transaction share one quote (`quoteMint`), and `minShares` is always the "at least" figure the page showed. On `TooExpensive`, or the index running short of IMD mid-buy, the site asks for 1% fewer shares, and stops before the shares would fall below that floor. Unused IMD is refunded by the contract.
 - **Redeem for IMD:** `redeemToImd(shares, minImdOut = 97% of the quote)`. The quote assumes a 2.5% cost on each sale.
 - **Redeem for the coins / claim / ask / rebalance / closeRequest:** no amounts beyond the user's own input. The upkeep buttons are enabled only when the contract would accept the call.
 - **One call at a time:** while one is in flight, every action button is disabled.

@@ -14,7 +14,7 @@
 
   function lockIfBusy() {
     if (!busy) return;
-    document.querySelectorAll("#act button:not([role=tab]), #keepers button").forEach((b) => (b.disabled = true));
+    document.querySelectorAll("#act button:not([role=tab]):not(.fit), #keepers button").forEach((b) => (b.disabled = true));
   }
 
   function fmt(v, dp) {
@@ -139,10 +139,12 @@
     if (amt < 0n) { $("buyQuote").textContent = "That is not a number."; return; }
     if (amt === 0n) { $("buyQuote").textContent = s.supply === 0n ? "No one has minted yet: the first mint sets one IMDEX5 per IMD invested." : "Enter an amount."; return; }
     if (s.supply === 0n) {
-      $("buyQuote").textContent = "First mint: about " + fmt((amt * 9950n) / 10000n, 4) + " IMDEX5, buying " + s.rows.filter((r) => r.listed).length + " coins with equal parts of " + fmt((amt * 9950n) / 10000n, 4) + " IMD.";
+      const n = BigInt(s.rows.filter((r) => r.listed).length);
+      $("buyQuote").textContent = "First mint: about " + fmt((amt * 9950n) / 10000n, 4) + " IMDEX5, buying " + n + " coins with " + fmt((amt * 9950n) / 10000n / n, 4) + " IMD each. Each coin must deliver at least 93% of its quote at the pool price, or nothing happens.";
     } else {
-      const est = (amt * E18 * 10000n) / (s.nav * (10000n + 50n + 250n + 100n));
-      $("buyQuote").textContent = "About " + fmt(est, 4) + " IMDEX5 (at least " + fmt((est * BigInt(10000 - SLIP_BPS)) / 10000n, 4) + "). Unused IMD is refunded.";
+      if (!s.pricesOk) { $("buyQuote").textContent = "A coin's pool price could not be read just now, so minting waits for the next refresh."; return; }
+      const q = X.quoteMint(s, amt, SLIP_BPS);
+      $("buyQuote").textContent = "About " + fmt(q.shares, 4) + " IMDEX5 (at least " + fmt(q.minShares, 4) + ", or nothing happens). Unused IMD is refunded.";
     }
     if (!account) { go.textContent = "Connect a wallet to mint"; return; }
     if (amt > s.imdBalance) { go.textContent = "Not enough IMD"; return; }
@@ -159,11 +161,18 @@
     if (amt < 0n) { $("sellQuote").textContent = "That is not a number."; return; }
     if (amt === 0n) { $("sellQuote").textContent = "Enter an amount."; return; }
     if (s.supply === 0n) { $("sellQuote").textContent = "Nothing is minted yet."; return; }
-    const out = X.quoteRedeemToImd(s, amt > s.supply ? s.supply : amt);
-    const keep = amt === s.supply ? 10000n : 9950n;
-    const kind = s.rows.filter((r) => r.held > 0n).map((r) => fmt((r.held * amt * keep) / (s.supply * 10000n), 2) + " " + esc(r.symbol));
-    if (s.idle > 0n) kind.push(fmt((s.idle * amt * keep) / (s.supply * 10000n), 4) + " IMD");
-    $("sellQuote").innerHTML = "For IMD: about " + fmt(out, 4) + " IMD (at least " + fmt((out * BigInt(10000 - SLIP_BPS)) / 10000n, 4) + ").<br>For the coins: " + kind.join(", ") + ".";
+    const a = amt > s.supply ? s.supply : amt;
+    const keep = a === s.supply ? 10000n : 9950n;
+    let forImd;
+    try {
+      const out = X.quoteRedeemToImd(s, a);
+      forImd = "about " + fmt(out, 4) + " IMD (at least " + fmt((out * BigInt(10000 - SLIP_BPS)) / 10000n, 4) + ", or nothing happens)";
+    } catch (e) {
+      forImd = "no quote: " + esc(e.message);
+    }
+    const kind = s.rows.filter((r) => r.held > 0n).map((r) => fmt((r.held * a * keep) / (s.supply * 10000n), 2) + " " + esc(r.symbol));
+    if (s.idle > 0n) kind.push(fmt((s.idle * a * keep) / (s.supply * 10000n), 4) + " IMD");
+    $("sellQuote").innerHTML = "For IMD: " + forImd + ".<br>For the coins: " + kind.join(", ") + ".";
     if (!account || amt > s.shares) return;
     $("sellImd").disabled = $("sellKind").disabled = false;
     lockIfBusy();
@@ -194,17 +203,20 @@
     }
   }
 
+  // The chain is read from the wallet on every action, not from ethers' cached network, so a
+  // switch after the first action still gets the switch prompt (audit c104e817, L4).
   async function signer() {
-    const net = await browser.getNetwork();
-    if (net.chainId !== X.C.CHAIN_ID) {
+    const id = await window.ethereum.request({ method: "eth_chainId" });
+    if (BigInt(id) !== X.C.CHAIN_ID) {
       setStatus("Switching your wallet to Ethereum…");
       await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x1" }] });
-      browser = new ethers.BrowserProvider(window.ethereum);
+      if (BigInt(await window.ethereum.request({ method: "eth_chainId" })) !== X.C.CHAIN_ID) throw new Error("the wallet is not on Ethereum");
     }
+    browser = new ethers.BrowserProvider(window.ethereum, "any");
     return browser.getSigner();
   }
 
-  async function run(label, fn) {
+  async function run(label, fn, op) {
     if (busy) return;
     busy = true;
     lockIfBusy();
@@ -214,7 +226,7 @@
       const rc = await fn(s, (m) => setStatus(m));
       setStatus(label + " done. Transaction " + short(rc.hash) + ".", "ok");
     } catch (e) {
-      setStatus(label + " did not go through: " + X.explain(e), "err");
+      setStatus(label + " did not go through: " + X.explain(e, op), "err");
     } finally {
       busy = false;
     }
@@ -227,10 +239,11 @@
       return;
     }
     try {
-      browser = new ethers.BrowserProvider(window.ethereum);
+      browser = new ethers.BrowserProvider(window.ethereum, "any");
       const accs = await browser.send("eth_requestAccounts", []);
       account = ethers.getAddress(accs[0]);
       $("connect").textContent = short(account);
+      window.ethereum.on && window.ethereum.on("chainChanged", () => { browser = new ethers.BrowserProvider(window.ethereum, "any"); refresh(); });
       window.ethereum.on && window.ethereum.on("accountsChanged", (a) => { account = a[0] ? ethers.getAddress(a[0]) : null; $("connect").textContent = account ? short(account) : "Connect wallet"; refresh(); });
       await refresh();
     } catch (e) {
@@ -260,7 +273,8 @@
     $("sellMax").onclick = () => { if (state && account) { $("sellAmt").value = ethers.formatEther(state.shares); quoteSell(); } };
     $("buyGo").onclick = () => {
       const amt = parse($("buyAmt").value);
-      run(state.supply === 0n ? "First mint" : "Mint", (s, step) => X.mintFor(ethers, s, amt, SLIP_BPS, step));
+      const first = state.supply === 0n;
+      run(first ? "First mint" : "Mint", (s, step) => X.mintFor(ethers, s, amt, SLIP_BPS, step), first ? "first" : "mint");
     };
     $("sellImd").onclick = () => {
       const amt = parse($("sellAmt").value);
