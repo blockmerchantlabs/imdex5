@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IIntake, IPoolManager, IRegistry, IUnlockCallback} from "./Interfaces.sol";
@@ -112,6 +113,7 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
     error ArtifactMissing(uint64 launch);
     error NoNextList();
     error BadDelta();
+    error NothingOut();
 
     // ---- events ----
     event Funded(address indexed from, uint256 amount);
@@ -363,7 +365,10 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
         returns (uint256 amountIn, uint256 amountOut)
     {
         if (msg.sender != address(this)) revert OnlySelf();
-        return _swap(token, hook, buy, amount, exactOut, limited);
+        (amountIn, amountOut) = _swap(token, hook, buy, amount, exactOut, limited);
+        // a swap that takes its input and delivers nothing is a failure, so the caller's
+        // try/catch skips it (rebalance, redeemToImd, residual buys) instead of booking it
+        if (amountIn > 0 && amountOut == 0) revert NothingOut();
     }
 
     // ---- internals: operations ----
@@ -389,6 +394,8 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
     }
 
     function _mintMore(address caller, uint256 shares, uint256 maxImdIn, uint256 minShares) private {
+        // a floor above the shares asked can never be met: refuse before any buy runs
+        if (minShares > shares) revert TooFewShares(shares);
         uint256 supply = totalSupply();
         uint256 minted = shares;
         uint256 cost = 0;
@@ -558,7 +565,7 @@ contract Imdex5 is ERC20, ReentrancyGuard, OracleAttestationConsumer, IUnlockCal
             if (zeroForOne ? moved > MIN_SQRT_PRICE : moved < MAX_SQRT_PRICE) limit = uint160(moved);
         }
         int256 delta = IPoolManager(POOL_MANAGER)
-            .swap(key, IPoolManager.SwapParams(zeroForOne, exactOut ? int256(amount) : -int256(amount), limit), "");
+            .swap(key, IPoolManager.SwapParams(zeroForOne, exactOut ? SafeCast.toInt256(amount) : -SafeCast.toInt256(amount), limit), "");
         int256 d0 = delta >> 128;
         int256 d1 = int256(int128(delta));
         (int256 dIn, int256 dOut) = zeroForOne ? (d0, d1) : (d1, d0);

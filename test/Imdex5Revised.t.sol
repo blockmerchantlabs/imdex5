@@ -199,7 +199,8 @@ contract Imdex5RevisedTest is Imdex5Base {
         _mintFirst(alice, 1000e18);
         shares = bound(shares, 1e18, 995e18 - 1);
         uint256 amount = index.held(tokens[2]) * shares / 995e18;
-        maxIn = bound(maxIn, 1, amount - 1);
+        // a sale big enough to pay some IMD; a sale that pays nothing is the test below
+        maxIn = bound(maxIn, 1e6, amount - 1);
         pm.setMaxIn(_key(tokens[2], hooks[2]), maxIn);
         uint256 heldBefore = index.held(tokens[2]);
         vm.prank(alice);
@@ -208,6 +209,24 @@ contract Imdex5RevisedTest is Imdex5Base {
         uint256 paid = unsold * 9950 / 10_000;
         assertEq(MockERC20(tokens[2]).balanceOf(alice), paid);
         assertEq(index.held(tokens[2]), heldBefore - maxIn - paid);
+        assertEq(MockERC20(tokens[2]).balanceOf(address(index)), index.held(tokens[2]));
+        _assertImdAccounting();
+    }
+
+    /// @dev A sale that takes coins and pays no IMD is refused (`NothingOut`): the whole share is
+    /// paid in kind at 99.50%, nothing is given to the pool for free.
+    function test_redeemToImdPaysInKindWhenTheSaleWouldPayNothing() public {
+        _mintFirst(alice, 1000e18);
+        uint256 amount = index.held(tokens[2]) * 100e18 / 995e18;
+        pm.setMaxIn(_key(tokens[2], hooks[2]), 50); // 50 coin wei is worth 0 IMD wei
+        uint256 heldBefore = index.held(tokens[2]);
+        uint256 poolCoinBefore = MockERC20(tokens[2]).balanceOf(address(pm));
+        vm.prank(alice);
+        index.redeemToImd(100e18, 0);
+        uint256 paid = amount * 9950 / 10_000;
+        assertEq(MockERC20(tokens[2]).balanceOf(alice), paid);
+        assertEq(index.held(tokens[2]), heldBefore - paid);
+        assertEq(MockERC20(tokens[2]).balanceOf(address(pm)), poolCoinBefore, "the pool took coins for nothing");
         assertEq(MockERC20(tokens[2]).balanceOf(address(index)), index.held(tokens[2]));
         _assertImdAccounting();
     }

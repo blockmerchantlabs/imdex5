@@ -269,16 +269,14 @@ contract Imdex5TaxEverywhereTest is Imdex5Base {
             assertEq(MockERC20(tokens[i]).balanceOf(address(index)), heldBefore[i]);
         }
         _assertAccounting();
-        // a rebalance buy of that coin delivers nothing and credits nothing, but spends the IMD:
-        // held must stay the real balance even when the swap's report says coins came out
+        // a rebalance buy of that coin delivers nothing, so it is skipped (NothingOut, audit
+        // 705dd677): no IMD is spent on it and nothing is credited
         _deliverList(_launches(5));
-        uint256 idleBefore = index.idleImd();
         uint256 poolBefore = MockERC20(tokens[0]).balanceOf(address(pm));
         vm.prank(bob);
         index.rebalance();
-        assertLt(MockERC20(tokens[0]).balanceOf(address(pm)), poolBefore, "the pool did not pay the buy out");
+        assertEq(MockERC20(tokens[0]).balanceOf(address(pm)), poolBefore, "a buy that delivers nothing ran");
         assertEq(index.held(tokens[0]), heldBefore[0], "a buy that delivered nothing was credited");
-        assertLt(index.idleImd(), idleBefore, "the rebalance spent nothing");
         _assertAccounting();
         // the holdings are still paid out in kind: the coin taxes only the pool's transfers
         _redeemAllAndCheck(alice);
